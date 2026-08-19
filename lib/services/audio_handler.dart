@@ -1,93 +1,17 @@
 ﻿// lib/services/audio_handler.dart
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
-
-/// Proxy source that fetches YouTube audio in fixed-size chunks.
-/// YouTube CDN rejects open-ended Range requests (bytes=0-) and very large ranges.
-/// It only accepts chunks <= ~1MB per request.
-class _YoutubeChunkedSource extends StreamAudioSource {
-  final String url;
-  final Map<String, String> requestHeaders;
-  // Chunk size that YouTube CDN accepts: must be < 1MB
-  static const int _chunkSize = 512 * 1024; // 512KB per chunk
-
-  _YoutubeChunkedSource({required this.url, required this.requestHeaders})
-      : super(tag: 'YoutubeChunked');
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    final s = start ?? 0;
-    // Always request a fixed chunk, never open-ended
-    final chunkEnd = end != null ? end - 1 : s + _chunkSize - 1;
-
-    debugPrint('[YoutubeProxy] Requesting bytes=$s-$chunkEnd (chunk=${chunkEnd - s + 1} bytes)');
-
-    final headers = Map<String, String>.from(requestHeaders);
-    headers['Range'] = 'bytes=$s-$chunkEnd';
-
-    final client = http.Client();
-    try {
-      final request = http.Request('GET', Uri.parse(url));
-      request.headers.addAll(headers);
-      final response = await client.send(request);
-
-      debugPrint('[YoutubeProxy] Status=${response.statusCode} '
-          'CT=${response.headers["content-type"]} '
-          'CL=${response.contentLength} '
-          'CR=${response.headers["content-range"]}');
-
-      if (response.statusCode == 403 || response.statusCode >= 400) {
-        final body = await response.stream.bytesToString();
-        debugPrint('[YoutubeProxy] Error body: ${body.substring(0, body.length.clamp(0, 200))}');
-        throw Exception('CDN ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 80))}');
-      }
-
-      int? rangeStart = s;
-      int? rangeEnd;
-      int? total;
-
-      final cr = response.headers['content-range'];
-      if (cr != null) {
-        final match = RegExp(r'bytes\s+(\d+)-(\d+)/(\d+|\*)').firstMatch(cr);
-        if (match != null) {
-          rangeStart = int.parse(match.group(1)!);
-          rangeEnd = int.parse(match.group(2)!) + 1;
-          if (match.group(3) != '*') total = int.parse(match.group(3)!);
-        }
-      }
-
-      final contentLength = rangeEnd != null
-          ? rangeEnd - rangeStart!
-          : response.contentLength;
-
-      debugPrint('[YoutubeProxy] Serving offset=$rangeStart total=$total len=$contentLength');
-
-      return StreamAudioResponse(
-        sourceLength: total,
-        contentLength: contentLength,
-        offset: rangeStart ?? 0,
-        contentType: 'audio/mp4',
-        stream: response.stream.map((chunk) => Uint8List.fromList(chunk)),
-      );
-    } catch (e) {
-      client.close();
-      rethrow;
-    }
-  }
-}
 
 /// BackgroundAudioHandler – bridge between audio_service and just_audio.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer(
     audioLoadConfiguration: const AudioLoadConfiguration(
       androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 10),
-        maxBufferDuration: Duration(seconds: 45),
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 60),
         prioritizeTimeOverSizeThresholds: true,
       ),
     ),
@@ -143,6 +67,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
 
   AudioPlayer get player => _player;
 
+  /// Load audio from remote URL or local file
   Future<void> loadUrl(String url, MediaItem item, {Map<String, String>? headers}) async {
     _isChangingTrack = true;
     mediaItem.add(item);
@@ -154,9 +79,13 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
           effectiveHeaders['User-Agent'] =
               'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
         }
-        debugPrint('[AudioHandler] YoutubeChunked loading...');
-        source = _YoutubeChunkedSource(url: url, requestHeaders: effectiveHeaders);
+        debugPrint('[AudioHandler] Loading remote audio source with native streaming: $url');
+        source = AudioSource.uri(
+          Uri.parse(url),
+          headers: effectiveHeaders,
+        );
       } else {
+        debugPrint('[AudioHandler] Loading local file source: $url');
         source = AudioSource.uri(Uri.file(url));
       }
       await _player.setAudioSource(source, preload: false);

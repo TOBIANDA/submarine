@@ -1,6 +1,8 @@
-// lib/services/download_service.dart
+﻿// lib/services/download_service.dart
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:flutter/foundation.dart';
@@ -15,28 +17,23 @@ class DownloadService {
   factory DownloadService() => _instance ??= DownloadService._();
 
   final YoutubeExplode _yt = YoutubeExplode();
-  final Map<String, StreamSubscription> _activeSubscriptions = {};
+  final Map<String, bool> _activeCancelTokens = {};
 
   void init() {}
 
   Future<void> cancelActiveDownload(String videoId) async {
-    final sub = _activeSubscriptions[videoId];
-    if (sub != null) {
-      await sub.cancel();
-      _activeSubscriptions.remove(videoId);
-      try {
-        final dir = await _getDownloadDir();
-        for (final ext in ['m4a', 'mp4', 'webm']) {
-          final file = File('${dir.path}/$videoId.$ext');
-          if (await file.exists()) await file.delete();
-        }
-      } catch (_) {}
-    }
+    _activeCancelTokens[videoId] = true;
+    try {
+      final dir = await _getDownloadDir();
+      for (final ext in ['m4a', 'mp4', 'webm']) {
+        final file = File('${dir.path}/$videoId.$ext');
+        if (await file.exists()) await file.delete();
+      }
+    } catch (_) {}
   }
 
   /// Mendapatkan direktori download yang tersedia
   Future<Directory> _getDownloadDir() async {
-    // Prioritas: external storage agar muncul di Android/data
     try {
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) {
@@ -45,105 +42,188 @@ class DownloadService {
         return dir;
       }
     } catch (_) {}
-    // Fallback ke internal app documents
     final appDir = await getApplicationDocumentsDirectory();
     final dir = Directory('${appDir.path}/downloads');
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
   }
 
-  /// Mengunduh audio lagu via stream chunk native (menghindari throttling YouTube)
+  /// Ambil URL audio stream langsung dari Innertube Android API
+  Future<(String, int, String)?> _getInnertubeAudioStream(String videoId) async {
+    final ua = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+    final httpClient = http.Client();
+    try {
+      final resp = await httpClient.post(
+        Uri.parse('https://www.youtube.com/youtubei/v1/player'),
+        headers: {
+          'User-Agent': ua,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'context': {
+            'client': {
+              'clientName': 'ANDROID',
+              'clientVersion': '20.10.38',
+              'androidSdkVersion': 30,
+              'userAgent': ua,
+              'hl': 'en',
+              'gl': 'US',
+            }
+          },
+          'videoId': videoId,
+        }),
+      ).timeout(const Duration(seconds: 8));
+
+      if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
+        final audioStreams = formats.where((f) {
+          final mime = f['mimeType'] as String? ?? '';
+          return mime.startsWith('audio/') && f['url'] != null;
+        }).toList();
+
+        if (audioStreams.isNotEmpty) {
+          audioStreams.sort((a, b) {
+            final a140 = (a['itag'] == 140) ? 1 : 0;
+            final b140 = (b['itag'] == 140) ? 1 : 0;
+            if (a140 != b140) return b140.compareTo(a140);
+            return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
+          });
+
+          final chosen = audioStreams.first;
+          final rawUrl = chosen['url'] as String;
+          final streamUrl = rawUrl.contains('?')
+              ? '$rawUrl&rn=1&rbuf=0&ratebypass=yes'
+              : '$rawUrl?rn=1&rbuf=0&ratebypass=yes';
+          final clen = int.tryParse(chosen['contentLength']?.toString() ?? '0') ?? 0;
+          final mime = chosen['mimeType'] as String? ?? 'audio/mp4';
+          final ext = mime.contains('webm') ? 'webm' : 'm4a';
+          return (streamUrl, clen, ext);
+        }
+      }
+    } catch (e) {
+      debugPrint('[Download] Innertube stream resolution error: $e');
+    } finally {
+      httpClient.close();
+    }
+    return null;
+  }
+
+  /// Mengunduh audio lagu ke file lokal
   Future<void> downloadVideoNative(
     VideoItem video, {
     required Function(double progress) onProgress,
     required Function(DownloadedTrack track) onComplete,
     required Function(String error) onError,
   }) async {
+    _activeCancelTokens[video.videoId] = false;
     IOSink? fileStream;
-    final completer = Completer<void>();
     try {
       debugPrint('[Download] Mulai unduhan: ${video.title}');
 
-      final clientsToTry = [
-        [YoutubeApiClient.ios, YoutubeApiClient.tv],
-        [YoutubeApiClient.androidVr],
-        null,
-      ];
+      final downloadDir = await _getDownloadDir();
+      final streamInfo = await _getInnertubeAudioStream(video.videoId);
 
-      StreamManifest? manifest;
-      for (final clients in clientsToTry) {
-        try {
-          manifest = await _yt.videos.streamsClient
-              .getManifest(video.videoId, ytClients: clients);
-          if (manifest.audioOnly.isNotEmpty) break;
-        } catch (e) {
-          debugPrint('[Download] Client gagal, coba berikutnya...');
+      if (streamInfo != null) {
+        final (url, totalBytes, ext) = streamInfo;
+        final localPath = '${downloadDir.path}/${video.videoId}.$ext';
+        final file = File(localPath);
+        fileStream = file.openWrite();
+
+        final request = http.Request('GET', Uri.parse(url));
+        request.headers['User-Agent'] =
+            'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+        
+        final client = http.Client();
+        final response = await client.send(request);
+
+        int downloadedBytes = 0;
+        final length = totalBytes > 0 ? totalBytes : (response.contentLength ?? 0);
+
+        await for (final chunk in response.stream) {
+          if (_activeCancelTokens[video.videoId] == true) {
+            await fileStream.close();
+            if (await file.exists()) await file.delete();
+            client.close();
+            onError('Unduhan dibatalkan');
+            return;
+          }
+          downloadedBytes += chunk.length;
+          fileStream.add(chunk);
+          if (length > 0) {
+            onProgress((downloadedBytes / length).clamp(0.0, 1.0));
+          }
         }
+
+        await fileStream.flush();
+        await fileStream.close();
+        client.close();
+
+        final track = DownloadedTrack(
+          videoId: video.videoId,
+          title: video.title,
+          channelTitle: video.channelTitle,
+          thumbnailUrl: video.thumbnailUrl,
+          durationSeconds: video.durationSeconds,
+          localPath: localPath,
+          downloadedAt: DateTime.now(),
+          fileSizeBytes: file.existsSync() ? file.lengthSync() : 0,
+        );
+        await DbService().insertDownload(track);
+        onComplete(track);
+        return;
       }
 
-      if (manifest == null || manifest.audioOnly.isEmpty) {
+      // Fallback via youtube_explode_dart
+      final manifest = await _yt.videos.streamsClient.getManifest(video.videoId);
+      if (manifest.audioOnly.isEmpty) {
         throw Exception('Tidak ada stream audio yang tersedia.');
       }
 
-      final streamInfo = manifest.audioOnly.withHighestBitrate();
-      final ext = streamInfo.container.name;
-      final downloadDir = await _getDownloadDir();
+      final ytStreamInfo = manifest.audioOnly.withHighestBitrate();
+      final ext = ytStreamInfo.container.name;
       final localPath = '${downloadDir.path}/${video.videoId}.$ext';
       final file = File(localPath);
       fileStream = file.openWrite();
 
-      final stream = _yt.videos.streamsClient.get(streamInfo);
-      final totalBytes = streamInfo.size.totalBytes;
+      final stream = _yt.videos.streamsClient.get(ytStreamInfo);
+      final totalBytes = ytStreamInfo.size.totalBytes;
       int downloadedBytes = 0;
 
-      final subscription = stream.listen(
-        (data) {
-          downloadedBytes += data.length;
-          final progress = totalBytes > 0 ? downloadedBytes / totalBytes : 0.0;
-          onProgress(progress);
-          fileStream?.add(data);
-        },
-        onDone: () async {
-          await fileStream?.flush();
-          await fileStream?.close();
-          _activeSubscriptions.remove(video.videoId);
+      await for (final data in stream) {
+        if (_activeCancelTokens[video.videoId] == true) {
+          await fileStream.close();
+          if (await file.exists()) await file.delete();
+          onError('Unduhan dibatalkan');
+          return;
+        }
+        downloadedBytes += data.length;
+        final progress = totalBytes > 0 ? downloadedBytes / totalBytes : 0.0;
+        onProgress(progress.clamp(0.0, 1.0));
+        fileStream.add(data);
+      }
 
-          try {
-            final track = DownloadedTrack(
-              videoId: video.videoId,
-              title: video.title,
-              channelTitle: video.channelTitle,
-              thumbnailUrl: video.thumbnailUrl,
-              durationSeconds: video.durationSeconds,
-              localPath: localPath,
-              downloadedAt: DateTime.now(),
-              fileSizeBytes: file.existsSync() ? file.lengthSync() : 0,
-            );
-            await DbService().insertDownload(track);
-            onComplete(track);
-          } catch (e) {
-            onError(e.toString());
-          } finally {
-            if (!completer.isCompleted) completer.complete();
-          }
-        },
-        onError: (e) async {
-          await fileStream?.close();
-          _activeSubscriptions.remove(video.videoId);
-          onError(e.toString());
-          if (!completer.isCompleted) completer.complete();
-        },
-        cancelOnError: true,
+      await fileStream.flush();
+      await fileStream.close();
+
+      final track = DownloadedTrack(
+        videoId: video.videoId,
+        title: video.title,
+        channelTitle: video.channelTitle,
+        thumbnailUrl: video.thumbnailUrl,
+        durationSeconds: video.durationSeconds,
+        localPath: localPath,
+        downloadedAt: DateTime.now(),
+        fileSizeBytes: file.existsSync() ? file.lengthSync() : 0,
       );
-
-      _activeSubscriptions[video.videoId] = subscription;
-      return completer.future;
+      await DbService().insertDownload(track);
+      onComplete(track);
     } catch (e) {
       await fileStream?.close();
-      _activeSubscriptions.remove(video.videoId);
       debugPrint('[Download] Gagal: $e');
       onError(e.toString());
-      if (!completer.isCompleted) completer.complete();
+    } finally {
+      _activeCancelTokens.remove(video.videoId);
     }
   }
 

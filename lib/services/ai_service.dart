@@ -1,4 +1,4 @@
-// lib/services/ai_service.dart
+﻿// lib/services/ai_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
@@ -240,3 +240,4 @@ CRITICAL DEDUPLICATION RULES:
     return stripped.trim();
   }
 }
+
