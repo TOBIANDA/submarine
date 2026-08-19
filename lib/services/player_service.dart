@@ -325,6 +325,14 @@ class PlayerService extends ChangeNotifier {
     }
   }
 
+  void stop() {
+    _currentVideo = null;
+    _currentIndex = -1;
+    _isPlaying = false;
+    _audioHandler?.stop();
+    notifyListeners();
+  }
+
   void togglePlay() {
     if (_audioHandler == null) return;
     if (_isPlaying) {
@@ -672,4 +680,5 @@ class PlayerService extends ChangeNotifier {
     super.dispose();
   }
 }
+
 
