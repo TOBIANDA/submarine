@@ -1,4 +1,4 @@
-import 'package:http/http.dart' as http;
+﻿import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
@@ -27,7 +27,7 @@ class PlayerService extends ChangeNotifier {
   BackgroundAudioHandler? _audioHandler;
   final YoutubeExplode _yt = YoutubeExplode();
 
-  // ─── State ────────────────────────────────────
+  // â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   VideoItem? _currentVideo;
   List<VideoItem> _queue = [];
   int _currentIndex = -1;
@@ -48,7 +48,7 @@ class PlayerService extends ChangeNotifier {
   // Callback to invalidate history provider
   VoidCallback? onHistoryUpdated;
 
-  // ─── Init ─────────────────────────────────────
+  // â”€â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   void init(BackgroundAudioHandler handler) {
     _audioHandler = handler;
 
@@ -73,7 +73,7 @@ class PlayerService extends ChangeNotifier {
     });
   }
 
-  // ─── Getters ──────────────────────────────────
+  // â”€â”€â”€ Getters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   VideoItem? get currentVideo => _currentVideo;
   List<VideoItem> get queue => _queue;
   int get currentIndex => _currentIndex;
@@ -89,7 +89,7 @@ class PlayerService extends ChangeNotifier {
   /// Expose the underlying AudioPlayer for position/duration streams
   AudioPlayer? get audioPlayer => _audioHandler?.player;
 
-  // ─── Playback Control ─────────────────────────
+  // â”€â”€â”€ Playback Control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /// Load a queue and optionally start at an index
   void loadQueue(List<VideoItem> items, {int startIndex = 0, String? playlistId}) {
@@ -215,11 +215,11 @@ class PlayerService extends ChangeNotifier {
     try {
       List<VideoItem> candidates = [];
       
-      debugPrint('[Player] 🤖 Meminta AI menyarankan lagu berikutnya yang serupa & berbeda...');
+      debugPrint('[Player] ðŸ¤– Meminta AI menyarankan lagu berikutnya yang serupa & berbeda...');
       final suggestion = await AiService().recommendNextSong(currentVid.title, currentVid.channelTitle);
       
       if (suggestion != null && suggestion.isNotEmpty) {
-         debugPrint('[Player] 🎯 AI Rekomendasi: $suggestion');
+         debugPrint('[Player] ðŸŽ¯ AI Rekomendasi: $suggestion');
          final aiResults = await YoutubeService().searchVideos(suggestion, maxResults: 5);
          if (aiResults.isNotEmpty) {
             candidates.addAll(aiResults);
@@ -228,7 +228,7 @@ class PlayerService extends ChangeNotifier {
 
       // Fallback ke YouTube related videos jika AI gagal
       if (candidates.isEmpty) {
-        debugPrint('[Player] 🔄 Fallback ke YouTube related videos...');
+        debugPrint('[Player] ðŸ”„ Fallback ke YouTube related videos...');
         final relatedResults = await YoutubeService().getRelatedVideos(currentVid, maxResults: 10);
         candidates.addAll(relatedResults);
       }
@@ -252,7 +252,7 @@ class PlayerService extends ChangeNotifier {
         // Jika judul lagu sangat mirip (re-upload), lewati!
         if (candidateTitleClean == currentTitleClean || 
            (currentTitleClean.length > 5 && candidateTitleClean.contains(currentTitleClean))) {
-          debugPrint('[Player] ⏭️ Melewati lagu duplikat: ${candidate.title}');
+          debugPrint('[Player] â­ï¸ Melewati lagu duplikat: ${candidate.title}');
           continue;
         }
 
@@ -269,7 +269,7 @@ class PlayerService extends ChangeNotifier {
       }
 
       if (bestCandidate != null) {
-        debugPrint('[Player] 🎶 Menambahkan ke antrean autoplay: ${bestCandidate.title} - ${bestCandidate.channelTitle}');
+        debugPrint('[Player] ðŸŽ¶ Menambahkan ke antrean autoplay: ${bestCandidate.title} - ${bestCandidate.channelTitle}');
         addToQueue(bestCandidate);
         playAt(_queue.length - 1);
         _consecutiveSuggestFailures = 0;
@@ -296,7 +296,7 @@ class PlayerService extends ChangeNotifier {
     
     // Simpan posisi terakhir
     final position = _audioHandler!.player.position;
-    debugPrint('[Player] 🔄 Mencoba memulihkan stream pada posisi $position...');
+    debugPrint('[Player] ðŸ”„ Mencoba memulihkan stream pada posisi $position...');
     
     _isLoadingAudio = true;
     notifyListeners();
@@ -309,9 +309,9 @@ class PlayerService extends ChangeNotifier {
       // Setelah berhasil load URL dan play dipanggil di _streamFromYouTube, 
       // kita seek ke posisi terakhir
       await _audioHandler!.player.seek(position);
-      debugPrint('[Player] ✅ Berhasil memulihkan stream');
+      debugPrint('[Player] âœ… Berhasil memulihkan stream');
     } catch (e) {
-      debugPrint('[Player] ❌ Gagal memulihkan stream: $e');
+      debugPrint('[Player] âŒ Gagal memulihkan stream: $e');
       // Jika gagal pulih, terpaksa skip
       if (hasNext) {
          playNext();
@@ -415,10 +415,10 @@ class PlayerService extends ChangeNotifier {
 
   int _consecutiveFailures = 0;
 
-  // ─── Private ──────────────────────────────────
+  // â”€â”€â”€ Private â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /// Extract audio stream URL via youtube_explode_dart and play via just_audio.
-  /// Priority: local file → YouTube muxed stream → YouTube audio-only fallback.
+  /// Priority: local file â†’ YouTube muxed stream â†’ YouTube audio-only fallback.
   Future<void> _loadAndPlayAudio(VideoItem video) async {
     if (_audioHandler == null) return;
 
@@ -434,7 +434,7 @@ class PlayerService extends ChangeNotifier {
       bool playedOffline = false;
 
       if (downloaded != null && File(downloaded.localPath).existsSync()) {
-        debugPrint('[Player] 🎵 Mencoba memutar dari file lokal: ${downloaded.localPath}');
+        debugPrint('[Player] ðŸŽµ Mencoba memutar dari file lokal: ${downloaded.localPath}');
         final mediaItem = _buildMediaItem(video);
         if (_loadId != currentLoadId) return;
         try {
@@ -449,7 +449,7 @@ class PlayerService extends ChangeNotifier {
           _audioHandler!.play();
           playedOffline = true;
         } catch (e) {
-          debugPrint('[Player] ⚠️ File lokal gagal dimuat, file mungkin korup atau format tidak didukung. Fallback ke streaming. Error: $e');
+          debugPrint('[Player] âš ï¸ File lokal gagal dimuat, file mungkin korup atau format tidak didukung. Fallback ke streaming. Error: $e');
           playedOffline = false;
         }
       } 
@@ -489,7 +489,7 @@ class PlayerService extends ChangeNotifier {
   /// Ambil stream URL dari YouTube dan mulai pemutaran.
   /// Menggunakan Innertube API (ViMusic/InnerTune style) yang memprioritaskan itag 140 (m4a/AAC).
   Future<void> _streamFromYouTube(VideoItem video, int currentLoadId, {int maxAttempts = 3}) async {
-    debugPrint('[Player] 🌐 Fetching stream for: ${video.title} (${video.videoId})');
+    debugPrint('[Player] ðŸŒ Fetching stream for: ${video.title} (${video.videoId})');
     Exception? lastError;
 
     final configs = [
@@ -536,7 +536,7 @@ class PlayerService extends ChangeNotifier {
         }
 
         try {
-          debugPrint('[Player] 🚀 [Attempt $attempt] Innertube $clientName client...');
+          debugPrint('[Player] ðŸš€ [Attempt $attempt] Innertube $clientName client...');
           final body = json.encode({
             'context': {'client': clientContext},
             'videoId': video.videoId,
@@ -575,12 +575,17 @@ class PlayerService extends ChangeNotifier {
               });
 
               final chosen = audioStreams.first;
-              final streamUrl = chosen['url'] as String;
+              // Tambah parameter ratebypass agar YouTube CDN tidak reject (403)
+              // YouTube Android app selalu kirim parameter ini saat streaming audio
+              final rawUrl = chosen['url'] as String;
+              final streamUrl = rawUrl.contains('?')
+                  ? '$rawUrl&rn=1&rbuf=0&ratebypass=yes'
+                  : '$rawUrl?rn=1&rbuf=0&ratebypass=yes';
               final bitrate = chosen['bitrate'];
               final itag = chosen['itag'];
               final mime = chosen['mimeType'];
               
-              debugPrint('[Player] 🎧 Innertube $clientName selected: itag $itag ($mime, $bitrate bps)');
+              debugPrint('[Player] ðŸŽ§ Innertube $clientName selected: itag $itag ($mime, $bitrate bps)');
 
               if (_loadId != currentLoadId) {
                 httpClient.close();
@@ -605,7 +610,7 @@ class PlayerService extends ChangeNotifier {
             }
           }
         } catch (e) {
-          debugPrint('[Player] ⚠️ Innertube $clientName failed: $e');
+          debugPrint('[Player] âš ï¸ Innertube $clientName failed: $e');
           lastError = Exception('Innertube $clientName: $e');
         }
       }
@@ -616,7 +621,25 @@ class PlayerService extends ChangeNotifier {
     }
 
     httpClient.close();
-    debugPrint('[Player] 💀 All streaming attempts failed: $lastError');
+    debugPrint('[Player] All Innertube failed, trying youtube_explode_dart fallback...');
+    try {
+      final manifest = await _yt.videos.streamsClient.getManifest(video.videoId);
+      final ytAudioStreams = manifest.audioOnly.toList();
+      if (ytAudioStreams.isNotEmpty) {
+        ytAudioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        final ytStream = ytAudioStreams.first;
+        final ytUrl = ytStream.url.toString();
+        debugPrint('[Player] YT-Explode fallback: ${ytStream.codec.mimeType} ${ytStream.bitrate}');
+        if (_loadId != currentLoadId) return;
+        final mediaItem = _buildMediaItem(video);
+        await _audioHandler!.loadUrl(ytUrl, mediaItem);
+        if (_loadId != currentLoadId) return;
+        _audioHandler!.play();
+        return;
+      }
+    } catch (ytEx) {
+      debugPrint('[Player] YT-Explode also failed: $ytEx');
+    }
     throw lastError ?? Exception('Gagal memuat stream audio.');
   }
 
@@ -649,3 +672,4 @@ class PlayerService extends ChangeNotifier {
     super.dispose();
   }
 }
+

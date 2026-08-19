@@ -1,17 +1,89 @@
-import 'dart:io';
-import 'package:http/http.dart' as http;
-// lib/services/audio_handler.dart
+﻿// lib/services/audio_handler.dart
+import 'dart:async';
+import 'dart:typed_data';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 
-/// BackgroundAudioHandler — jembatan antara audio_service dan just_audio.
-/// Menangani foreground service, notifikasi lock screen, dan kontrol media.
+/// Proxy source that fetches YouTube audio in fixed-size chunks.
+/// YouTube CDN rejects open-ended Range requests (bytes=0-) and very large ranges.
+/// It only accepts chunks <= ~1MB per request.
+class _YoutubeChunkedSource extends StreamAudioSource {
+  final String url;
+  final Map<String, String> requestHeaders;
+  // Chunk size that YouTube CDN accepts: must be < 1MB
+  static const int _chunkSize = 512 * 1024; // 512KB per chunk
+
+  _YoutubeChunkedSource({required this.url, required this.requestHeaders})
+      : super(tag: 'YoutubeChunked');
+
+  @override
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    final s = start ?? 0;
+    // Always request a fixed chunk, never open-ended
+    final chunkEnd = end != null ? end - 1 : s + _chunkSize - 1;
+
+    debugPrint('[YoutubeProxy] Requesting bytes=$s-$chunkEnd (chunk=${chunkEnd - s + 1} bytes)');
+
+    final headers = Map<String, String>.from(requestHeaders);
+    headers['Range'] = 'bytes=$s-$chunkEnd';
+
+    final client = http.Client();
+    try {
+      final request = http.Request('GET', Uri.parse(url));
+      request.headers.addAll(headers);
+      final response = await client.send(request);
+
+      debugPrint('[YoutubeProxy] Status=${response.statusCode} '
+          'CT=${response.headers["content-type"]} '
+          'CL=${response.contentLength} '
+          'CR=${response.headers["content-range"]}');
+
+      if (response.statusCode == 403 || response.statusCode >= 400) {
+        final body = await response.stream.bytesToString();
+        debugPrint('[YoutubeProxy] Error body: ${body.substring(0, body.length.clamp(0, 200))}');
+        throw Exception('CDN ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 80))}');
+      }
+
+      int? rangeStart = s;
+      int? rangeEnd;
+      int? total;
+
+      final cr = response.headers['content-range'];
+      if (cr != null) {
+        final match = RegExp(r'bytes\s+(\d+)-(\d+)/(\d+|\*)').firstMatch(cr);
+        if (match != null) {
+          rangeStart = int.parse(match.group(1)!);
+          rangeEnd = int.parse(match.group(2)!) + 1;
+          if (match.group(3) != '*') total = int.parse(match.group(3)!);
+        }
+      }
+
+      final contentLength = rangeEnd != null
+          ? rangeEnd - rangeStart!
+          : response.contentLength;
+
+      debugPrint('[YoutubeProxy] Serving offset=$rangeStart total=$total len=$contentLength');
+
+      return StreamAudioResponse(
+        sourceLength: total,
+        contentLength: contentLength,
+        offset: rangeStart ?? 0,
+        contentType: 'audio/mp4',
+        stream: response.stream.map((chunk) => Uint8List.fromList(chunk)),
+      );
+    } catch (e) {
+      client.close();
+      rethrow;
+    }
+  }
+}
+
+/// BackgroundAudioHandler – bridge between audio_service and just_audio.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer(
-    // Konfigurasi buffer Android agar buffering awal lebih cepat
-    // dan mengurangi kemungkinan stuck saat stream dimulai
     audioLoadConfiguration: const AudioLoadConfiguration(
       androidLoadControl: AndroidLoadControl(
         minBufferDuration: Duration(seconds: 10),
@@ -21,24 +93,16 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ),
   );
 
-  // Guard agar event 'completed' tidak terpicu saat track sedang berpindah.
-  // Ini mencegah bug lagu skip-skip sendiri akibat race condition.
   bool _isChangingTrack = false;
 
   BackgroundAudioHandler() {
     _initAudioSession();
-    // Forward player state changes ke audio_service
     _player.playbackEventStream.listen(_broadcastState);
-    
-    // just_audio's playbackEventStream tidak memancarkan event saat status 'playing' berubah
-    // (misalnya saat kita memanggil _player.play()), jadi kita harus listen ke playingStream juga.
     _player.playingStream.listen((playing) {
       if (playbackState.value.playing != playing) {
         _broadcastState(_player.playbackEvent);
       }
     });
-
-    // TAMBAHAN: sinkronkan duration asli dari just_audio ke MediaItem
     _player.durationStream.listen((duration) {
       if (duration != null && duration > Duration.zero) {
         final current = mediaItem.value;
@@ -47,37 +111,26 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         }
       }
     });
-
     _player.processingStateStream.listen((state) {
-      // Abaikan event saat track sedang ganti untuk hindari false skip
       if (_isChangingTrack && state != ProcessingState.ready) {
         _broadcastState(_player.playbackEvent);
         return;
       }
-      // Clear flag saat player sudah siap
       if (state == ProcessingState.ready) {
         _isChangingTrack = false;
         _broadcastState(_player.playbackEvent);
         return;
       }
-
       if (state == ProcessingState.completed) {
         final position = _player.position;
         final duration = _player.duration;
-        
-        // Cek jika EOF prematur (koneksi terputus tiba-tiba atau file corrupt di tengah)
-        // Threshold dinaikkan ke 10 detik untuk menghindari false positive
         if (duration != null && duration.inSeconds > 0) {
           if ((duration - position).inSeconds > 10) {
-            debugPrint('[AudioHandler] Premature EOF terdeteksi, mencoba memulihkan stream...');
+            debugPrint('[AudioHandler] Premature EOF, recovering...');
             customEvent.add('recoverPrematureEOF');
             return;
           }
-        } else {
-           debugPrint('[AudioHandler] Durasi null/0 saat completed, mencoba auto-skip.');
         }
-
-        // Trigger auto-advance via skipToNext
         skipToNext();
       }
     });
@@ -88,24 +141,25 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     await session.configure(const AudioSessionConfiguration.music());
   }
 
-  // ─── Public accessor ─────────────────────────────────
   AudioPlayer get player => _player;
 
-  // ─── Load audio from URL ──────────────────────────────
-      Future<void> loadUrl(String url, MediaItem item, {Map<String, String>? headers}) async {
+  Future<void> loadUrl(String url, MediaItem item, {Map<String, String>? headers}) async {
     _isChangingTrack = true;
     mediaItem.add(item);
-
     try {
-      await _player.setAudioSource(
-        AudioSource.uri(
-          url.startsWith('http') ? Uri.parse(url) : Uri.file(url),
-          headers: url.startsWith('http') ? (headers ?? {
-            'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
-          }) : null,
-        ),
-        preload: true,
-      );
+      AudioSource source;
+      if (url.startsWith('http')) {
+        final effectiveHeaders = Map<String, String>.from(headers ?? {});
+        if (!effectiveHeaders.containsKey('User-Agent')) {
+          effectiveHeaders['User-Agent'] =
+              'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+        }
+        debugPrint('[AudioHandler] YoutubeChunked loading...');
+        source = _YoutubeChunkedSource(url: url, requestHeaders: effectiveHeaders);
+      } else {
+        source = AudioSource.uri(Uri.file(url));
+      }
+      await _player.setAudioSource(source, preload: false);
     } catch (e) {
       _isChangingTrack = false;
       playbackState.add(playbackState.value.copyWith(
@@ -115,26 +169,12 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
-  // ─── BaseAudioHandler overrides ───────────────────────
-  @override
-  Future<void> play() async {
-    await _player.play();
-  }
-
-  @override
-  Future<void> pause() async {
-    await _player.pause();
-  }
-
-  @override
-  Future<void> seek(Duration position) async {
-    await _player.seek(position);
-  }
+  @override Future<void> play() async => _player.play();
+  @override Future<void> pause() async => _player.pause();
+  @override Future<void> seek(Duration position) async => _player.seek(position);
 
   @override
   Future<void> stop() async {
-    // Broadcast idle state dulu agar Android tahu media session sudah selesai.
-    // Ini yang membuat notifikasi bisa hilang saat app di-kill dari recent apps.
     playbackState.add(playbackState.value.copyWith(
       processingState: AudioProcessingState.idle,
       playing: false,
@@ -143,21 +183,12 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     await super.stop();
   }
 
-  @override
-  Future<void> skipToNext() async {
-    customEvent.add('skipToNext');
-  }
+  @override Future<void> skipToNext() async => customEvent.add('skipToNext');
+  @override Future<void> skipToPrevious() async => customEvent.add('skipToPrevious');
 
-  @override
-  Future<void> skipToPrevious() async {
-    customEvent.add('skipToPrevious');
-  }
-
-  // ─── Internal ─────────────────────────────────────────
   void _broadcastState(PlaybackEvent event) {
     try {
       final playing = _player.playing;
-      debugPrint('[AudioHandler] Broadcasting state: playing=$playing, processingState=${_player.processingState}');
       playbackState.add(playbackState.value.copyWith(
         controls: [
           MediaControl.skipToPrevious,
@@ -166,15 +197,9 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
           MediaControl.stop,
         ],
         systemActions: const {
-          MediaAction.seek,
-          MediaAction.seekForward,
-          MediaAction.seekBackward,
-          MediaAction.play,
-          MediaAction.pause,
-          MediaAction.playPause,
-          MediaAction.skipToNext,
-          MediaAction.skipToPrevious,
-          MediaAction.stop,
+          MediaAction.seek, MediaAction.seekForward, MediaAction.seekBackward,
+          MediaAction.play, MediaAction.pause, MediaAction.playPause,
+          MediaAction.skipToNext, MediaAction.skipToPrevious, MediaAction.stop,
         },
         androidCompactActionIndices: const [0, 1, 2],
         processingState: const {
@@ -190,7 +215,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         speed: _player.speed,
         queueIndex: event.currentIndex,
       ));
-      debugPrint('[AudioHandler] Broadcast success');
     } catch (e, stack) {
       debugPrint('[AudioHandler] Broadcast ERROR: $e\n$stack');
     }
@@ -204,6 +228,3 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 }
-
-
-
