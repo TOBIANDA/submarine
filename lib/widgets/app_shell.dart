@@ -3,11 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
-import '../services/youtube_player_engine.dart';
 import '../theme/app_theme.dart';
 
 class AppShell extends ConsumerWidget {
@@ -24,27 +23,15 @@ class AppShell extends ConsumerWidget {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background audio webview engine (0 opacity / offscreen)
-          Positioned(
-            left: -9999,
-            top: -9999,
-            width: 1,
-            height: 1,
+          // Background YouTube Player Widget (keeps webview active & playing audio)
+          Offstage(
+            offstage: true,
             child: SizedBox(
-              width: 1,
-              height: 1,
-              child: InAppWebView(
-                initialSettings: InAppWebViewSettings(
-                  mediaPlaybackRequiresUserGesture: false,
-                  allowsInlineMediaPlayback: true,
-                  javaScriptEnabled: true,
-                  cacheEnabled: true,
-                  userAgent:
-                      'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-                ),
-                onWebViewCreated: (controller) {
-                  YoutubePlayerEngine().attachController(controller);
-                },
+              width: 100,
+              height: 100,
+              child: YoutubePlayer(
+                controller: player.youtubeController,
+                showVideoProgressIndicator: false,
               ),
             ),
           ),
