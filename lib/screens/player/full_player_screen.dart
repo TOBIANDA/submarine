@@ -268,10 +268,7 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
                         ],
                       );
                     },
-                  )
-                else
-                  const SizedBox(height: 30),
-
+                  ),
                 const SizedBox(height: 10),
 
                 // ── Playback Controls (Shuffle, Prev, Play/Pause, Next, Repeat) ──
@@ -463,4 +460,6 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
     );
   }
 }
+
+
 

@@ -154,6 +154,23 @@ class PlayerService extends ChangeNotifier {
 
   // ─── Playback Control ──────────────────────
 
+  void loadQueue(List<VideoItem> items, {int startIndex = 0, String? playlistId}) {
+    _queue = List.from(items);
+    _currentPlaylistId = playlistId;
+    _shuffleHistory = [];
+    _unplayedShuffleIndices = [];
+    _initShuffleIndices();
+    if (startIndex >= 0 && startIndex < _queue.length) {
+      playAt(startIndex);
+    }
+  }
+
+  void playSingle(VideoItem video) {
+    _queue = [video];
+    _currentPlaylistId = null;
+    playAt(0);
+  }
+
   void playVideo(VideoItem video, {List<VideoItem>? queue, int? index, String? playlistId}) {
     if (queue != null) {
       _queue = List.from(queue);
@@ -249,17 +266,15 @@ class PlayerService extends ChangeNotifier {
 
       List<VideoItem> candidates = [];
       try {
-        final aiSuggestions = await AiService().getSmartRecommendations(
-          currentTrack: '${_currentVideo!.title} ${_currentVideo!.channelTitle}',
-          recentHistory: _queue.take(5).map((v) => '${v.title} ${v.channelTitle}').toList(),
+        final aiSuggestion = await AiService().recommendNextSong(
+          _currentVideo!.title,
+          _currentVideo!.channelTitle,
         );
 
-        if (aiSuggestions.isNotEmpty) {
-          for (final songQuery in aiSuggestions.take(3)) {
-            final searchResults = await YoutubeService().search(songQuery);
-            if (searchResults.isNotEmpty) {
-              candidates.add(searchResults.first);
-            }
+        if (aiSuggestion != null && aiSuggestion.isNotEmpty) {
+          final aiResults = await YoutubeService().searchVideos(aiSuggestion, maxResults: 5);
+          if (aiResults.isNotEmpty) {
+            candidates.addAll(aiResults);
           }
         }
       } catch (e) {
@@ -267,7 +282,7 @@ class PlayerService extends ChangeNotifier {
       }
 
       if (candidates.isEmpty) {
-        final related = await YoutubeService().getRelatedVideos(_currentVideo!.videoId);
+        final related = await YoutubeService().getRelatedVideos(_currentVideo!);
         candidates.addAll(related);
       }
 
@@ -502,7 +517,7 @@ class PlayerService extends ChangeNotifier {
   }
 
   void _saveToHistory(VideoItem video) {
-    DbService().insertHistory(
+    DbService().upsertHistory(
       PlayHistory(
         videoId: video.videoId,
         title: video.title,
