@@ -487,12 +487,40 @@ class PlayerService extends ChangeNotifier {
 
 
   /// Ambil stream URL dari YouTube dan mulai pemutaran.
-  /// Menggunakan Innertube Android Engine (arsitektur ViMusic/InnerTune) yang langsung memberikan direct URL bebas 403.
+  /// Menggunakan Innertube API (ViMusic/InnerTune style) yang memprioritaskan itag 140 (m4a/AAC).
   Future<void> _streamFromYouTube(VideoItem video, int currentLoadId, {int maxAttempts = 3}) async {
     debugPrint('[Player] 🌐 Fetching stream for: ${video.title} (${video.videoId})');
     Exception? lastError;
 
-    const androidUA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+    final configs = [
+      // 1. Android Client (itag 140 AAC)
+      (
+        'ANDROID',
+        'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+        {
+          'clientName': 'ANDROID',
+          'clientVersion': '20.10.38',
+          'androidSdkVersion': 30,
+          'userAgent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+          'hl': 'en',
+          'gl': 'US',
+        }
+      ),
+      // 2. iOS Client (itag 140 AAC)
+      (
+        'IOS',
+        'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+        {
+          'clientName': 'IOS',
+          'clientVersion': '20.10.4',
+          'deviceModel': 'iPhone16,2',
+          'userAgent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
+          'hl': 'en',
+          'gl': 'US',
+        }
+      ),
+    ];
+
     final httpClient = http.Client();
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -501,125 +529,89 @@ class PlayerService extends ChangeNotifier {
         return;
       }
 
-      // ── Method 1: Innertube Android API (ViMusic / InnerTune Architecture) ──
-      try {
-        debugPrint('[Player] 🚀 [Attempt $attempt] Requesting stream from Innertube Android API...');
-        final body = json.encode({
-          'context': {
-            'client': {
-              'clientName': 'ANDROID',
-              'clientVersion': '20.10.38',
-              'androidSdkVersion': 30,
-              'userAgent': androidUA,
-              'hl': 'en',
-              'gl': 'US',
-            }
-          },
-          'videoId': video.videoId,
-          'playbackContext': {
-            'contentPlaybackContext': {
-              'html5Preference': 'HTML5_PREF_WANTS',
-              'signatureTimestamp': 19800,
-            }
-          }
-        });
-
-        final resp = await httpClient.post(
-          Uri.parse('https://www.youtube.com/youtubei/v1/player'),
-          headers: {
-            'User-Agent': androidUA,
-            'Content-Type': 'application/json',
-          },
-          body: body,
-        ).timeout(const Duration(seconds: 10));
-
-        if (resp.statusCode == 200) {
-          final data = json.decode(resp.body) as Map<String, dynamic>;
-          final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
-          final audioStreams = formats.where((f) {
-            final mime = f['mimeType'] as String? ?? '';
-            return mime.startsWith('audio/') && f['url'] != null;
-          }).toList();
-
-          if (audioStreams.isNotEmpty) {
-            // Urutkan berdasarkan bitrate tertinggi
-            audioStreams.sort((a, b) => ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0));
-            final bestAudio = audioStreams.first;
-            final streamUrl = bestAudio['url'] as String;
-            final bitrate = bestAudio['bitrate'];
-            final itag = bestAudio['itag'];
-            
-            debugPrint('[Player] 🎧 Innertube Success: itag $itag ($bitrate bps)');
-
-            if (_loadId != currentLoadId) {
-              httpClient.close();
-              return;
-            }
-
-            final mediaItem = _buildMediaItem(video);
-            await _audioHandler!.loadUrl(
-              streamUrl,
-              mediaItem,
-              headers: {'User-Agent': androidUA},
-            );
-            
-            if (_loadId != currentLoadId) {
-              httpClient.close();
-              return;
-            }
-            
-            _audioHandler!.play();
-            httpClient.close();
-            return; // Berhasil!
-          }
-        }
-      } catch (e) {
-        debugPrint('[Player] ⚠️ Innertube attempt $attempt failed: $e');
-        lastError = Exception('Innertube: $e');
-      }
-
-      // ── Method 2: Fallback via YoutubeExplode ──
-      try {
-        debugPrint('[Player] 🔄 [Attempt $attempt] Fallback to YoutubeExplode...');
-        final manifest = await _yt.videos.streamsClient
-            .getManifest(video.videoId, ytClients: [YoutubeApiClient.androidSdkless])
-            .timeout(const Duration(seconds: 12));
-
+      for (final (clientName, userAgent, clientContext) in configs) {
         if (_loadId != currentLoadId) {
           httpClient.close();
           return;
         }
 
-        final audioStreams = manifest.audioOnly;
-        if (audioStreams.isNotEmpty) {
-          final audioInfo = audioStreams.withHighestBitrate();
-          final rawUrl = audioInfo.url.toString();
-          
-          debugPrint('[Player] 🎧 YoutubeExplode Success: ${audioInfo.container.name} (${audioInfo.bitrate})');
+        try {
+          debugPrint('[Player] 🚀 [Attempt $attempt] Innertube $clientName client...');
+          final body = json.encode({
+            'context': {'client': clientContext},
+            'videoId': video.videoId,
+            'playbackContext': {
+              'contentPlaybackContext': {
+                'html5Preference': 'HTML5_PREF_WANTS',
+                'signatureTimestamp': 19800,
+              }
+            }
+          });
 
-          final mediaItem = _buildMediaItem(video);
-          await _audioHandler!.loadUrl(
-            rawUrl,
-            mediaItem,
-            headers: {'User-Agent': androidUA},
-          );
+          final resp = await httpClient.post(
+            Uri.parse('https://www.youtube.com/youtubei/v1/player'),
+            headers: {
+              'User-Agent': userAgent,
+              'Content-Type': 'application/json',
+            },
+            body: body,
+          ).timeout(const Duration(seconds: 8));
 
-          if (_loadId != currentLoadId) {
-            httpClient.close();
-            return;
+          if (resp.statusCode == 200) {
+            final data = json.decode(resp.body) as Map<String, dynamic>;
+            final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
+            final audioStreams = formats.where((f) {
+              final mime = f['mimeType'] as String? ?? '';
+              return mime.startsWith('audio/') && f['url'] != null;
+            }).toList();
+
+            if (audioStreams.isNotEmpty) {
+              // Prioritas 1: itag 140 (audio/mp4 m4a AAC) - paling stabil di ExoPlayer Android
+              audioStreams.sort((a, b) {
+                final aIs140 = (a['itag'] == 140) ? 1 : 0;
+                final bIs140 = (b['itag'] == 140) ? 1 : 0;
+                if (aIs140 != bIs140) return bIs140.compareTo(aIs140);
+                return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
+              });
+
+              final chosen = audioStreams.first;
+              final streamUrl = chosen['url'] as String;
+              final bitrate = chosen['bitrate'];
+              final itag = chosen['itag'];
+              final mime = chosen['mimeType'];
+              
+              debugPrint('[Player] 🎧 Innertube $clientName selected: itag $itag ($mime, $bitrate bps)');
+
+              if (_loadId != currentLoadId) {
+                httpClient.close();
+                return;
+              }
+
+              final mediaItem = _buildMediaItem(video);
+              await _audioHandler!.loadUrl(
+                streamUrl,
+                mediaItem,
+                headers: {'User-Agent': userAgent},
+              );
+              
+              if (_loadId != currentLoadId) {
+                httpClient.close();
+                return;
+              }
+              
+              _audioHandler!.play();
+              httpClient.close();
+              return; // Sukses!
+            }
           }
-
-          _audioHandler!.play();
-          httpClient.close();
-          return; // Berhasil!
+        } catch (e) {
+          debugPrint('[Player] ⚠️ Innertube $clientName failed: $e');
+          lastError = Exception('Innertube $clientName: $e');
         }
-      } catch (e) {
-        debugPrint('[Player] ⚠️ YoutubeExplode attempt $attempt failed: $e');
-        lastError = Exception('YoutubeExplode: $e');
       }
 
       if (attempt < maxAttempts) {
-        await Future.delayed(Duration(milliseconds: 400 * attempt));
+        await Future.delayed(Duration(milliseconds: 300 * attempt));
       }
     }
 
