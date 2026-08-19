@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
-import 'package:just_audio/just_audio.dart';
+import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
@@ -14,7 +14,7 @@ import 'db_service.dart';
 import 'youtube_service.dart';
 import 'ai_service.dart';
 
-export 'package:just_audio/just_audio.dart' show AudioPlayer;
+export 'package:just_audio/just_audio.dart' show AudioPlayer, ProcessingState;
 
 enum RepeatMode { none, all, one }
 
@@ -574,3 +574,4 @@ class PlayerService extends ChangeNotifier {
     super.dispose();
   }
 }
+
