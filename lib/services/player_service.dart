@@ -1,6 +1,4 @@
-﻿import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -14,6 +12,7 @@ import 'audio_handler.dart';
 import 'db_service.dart';
 import 'youtube_service.dart';
 import 'ai_service.dart';
+import 'youtube_player_engine.dart';
 
 export 'package:just_audio/just_audio.dart' show AudioPlayer;
 
@@ -27,7 +26,7 @@ class PlayerService extends ChangeNotifier {
   BackgroundAudioHandler? _audioHandler;
   final YoutubeExplode _yt = YoutubeExplode();
 
-  // â”€â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─── State ─────────────────────────────────
   VideoItem? _currentVideo;
   List<VideoItem> _queue = [];
   int _currentIndex = -1;
@@ -37,6 +36,12 @@ class PlayerService extends ChangeNotifier {
   bool _audioFocusMode = false;
   String? _currentPlaylistId;
   bool _isLoadingAudio = false;
+  bool _isPlayingOffline = false;
+
+  Duration _currentPosition = Duration.zero;
+  Duration? _currentDuration;
+  final StreamController<Duration> _positionController = StreamController<Duration>.broadcast();
+  final StreamController<Duration?> _durationController = StreamController<Duration?>.broadcast();
 
   // Shuffle queue state
   List<int> _shuffleHistory = [];
@@ -48,18 +53,33 @@ class PlayerService extends ChangeNotifier {
   // Callback to invalidate history provider
   VoidCallback? onHistoryUpdated;
 
-  // â”€â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─── Init ──────────────────────────────────
   void init(BackgroundAudioHandler handler) {
     _audioHandler = handler;
 
-    // Listen to playback state from audio_service
+    // Listen to playback state from offline audio_service
     handler.playbackState.listen((state) {
-      final playing = state.playing;
-      if (_isPlaying != playing) {
-        _isPlaying = playing;
-        notifyListeners();
+      if (_isPlayingOffline) {
+        final playing = state.playing;
+        if (_isPlaying != playing) {
+          _isPlaying = playing;
+          notifyListeners();
+        }
       }
-      // Auto-advance is now handled via customEvent from BackgroundAudioHandler
+    });
+
+    handler.player.positionStream.listen((pos) {
+      if (_isPlayingOffline) {
+        _currentPosition = pos;
+        _positionController.add(pos);
+      }
+    });
+
+    handler.player.durationStream.listen((dur) {
+      if (_isPlayingOffline) {
+        _currentDuration = dur;
+        _durationController.add(dur);
+      }
     });
 
     handler.customEvent.listen((event) {
@@ -67,13 +87,53 @@ class PlayerService extends ChangeNotifier {
         playNext();
       } else if (event == 'skipToPrevious') {
         playPrevious();
-      } else if (event == 'recoverPrematureEOF') {
-        _recoverPlayback();
       }
     });
+
+    // YouTube HTML5 Player Engine callbacks
+    final ytEngine = YoutubePlayerEngine();
+    ytEngine.onPlaybackStateChanged = (playing) {
+      if (!_isPlayingOffline) {
+        _isPlaying = playing;
+        _audioHandler?.playbackState.add(
+          _audioHandler!.playbackState.value.copyWith(
+            playing: playing,
+            processingState: AudioProcessingState.ready,
+          ),
+        );
+        notifyListeners();
+      }
+    };
+
+    ytEngine.onProgress = (pos, dur) {
+      if (!_isPlayingOffline) {
+        _currentPosition = pos;
+        _currentDuration = dur;
+        _positionController.add(pos);
+        _durationController.add(dur);
+
+        final curItem = _audioHandler?.mediaItem.value;
+        if (curItem != null && curItem.duration != dur && dur > Duration.zero) {
+          _audioHandler?.mediaItem.add(curItem.copyWith(duration: dur));
+        }
+
+        _audioHandler?.playbackState.add(
+          _audioHandler!.playbackState.value.copyWith(
+            updatePosition: pos,
+            bufferedPosition: pos + const Duration(seconds: 15),
+          ),
+        );
+      }
+    };
+
+    ytEngine.onEnded = () {
+      if (!_isPlayingOffline) {
+        playNext();
+      }
+    };
   }
 
-  // â”€â”€â”€ Getters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─── Getters ───────────────────────────────
   VideoItem? get currentVideo => _currentVideo;
   List<VideoItem> get queue => _queue;
   int get currentIndex => _currentIndex;
@@ -81,195 +141,141 @@ class PlayerService extends ChangeNotifier {
   bool get isShuffled => _isShuffled;
   RepeatMode get repeatMode => _repeatMode;
   bool get audioFocusMode => _audioFocusMode;
+  String? get currentPlaylistId => _currentPlaylistId;
+  bool get hasNext => _queue.isNotEmpty && (_currentIndex < _queue.length - 1 || _repeatMode == RepeatMode.all || _isShuffled);
+  bool get hasPrevious => _queue.isNotEmpty && (_currentIndex > 0 || _isShuffled);
   bool get isLoadingAudio => _isLoadingAudio;
-  bool get hasPrevious => _currentIndex > 0 || _repeatMode == RepeatMode.all;
-  bool get hasNext =>
-      _currentIndex < _queue.length - 1 || _repeatMode == RepeatMode.all;
-
-  /// Expose the underlying AudioPlayer for position/duration streams
   AudioPlayer? get audioPlayer => _audioHandler?.player;
 
-  // â”€â”€â”€ Playback Control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  Duration get position => _currentPosition;
+  Duration? get duration => _currentDuration ?? (_currentVideo != null && _currentVideo!.durationSeconds > 0 ? Duration(seconds: _currentVideo!.durationSeconds) : null);
+  Stream<Duration> get positionStream => _positionController.stream;
+  Stream<Duration?> get durationStream => _durationController.stream;
 
-  /// Load a queue and optionally start at an index
-  void loadQueue(List<VideoItem> items, {int startIndex = 0, String? playlistId}) {
-    _queue = List.from(items);
-    _currentPlaylistId = playlistId;
-    _shuffleHistory = [];
-    if (_isShuffled) _generateShuffleQueue();
-    playAt(startIndex);
-  }
+  // ─── Playback Control ──────────────────────
 
-  /// Play a single video immediately, replacing the queue
-  void playSingle(VideoItem video) {
-    _queue = [video];
-    _currentPlaylistId = null;
-    playAt(0);
-  }
-
-  /// Add video to queue
-  void addToQueue(VideoItem video) {
-    if (_queue.isEmpty || !_isPlaying) {
+  void playVideo(VideoItem video, {List<VideoItem>? queue, int? index, String? playlistId}) {
+    if (queue != null) {
+      _queue = List.from(queue);
+      _currentIndex = index ?? 0;
+      _currentPlaylistId = playlistId;
+      _initShuffleIndices();
+    } else if (!_queue.any((v) => v.videoId == video.videoId)) {
       _queue.add(video);
-      playAt(_queue.length - 1);
+      _currentIndex = _queue.length - 1;
+      _initShuffleIndices();
     } else {
-      _queue.insert((_currentIndex + 1).clamp(0, _queue.length), video);
-      notifyListeners();
+      _currentIndex = _queue.indexWhere((v) => v.videoId == video.videoId);
     }
+
+    _currentVideo = video;
+    _consecutiveSuggestFailures = 0;
+    notifyListeners();
+    _saveToHistory(video);
+    _loadAndPlayAudio(video);
   }
 
-  /// Play next in queue
   void playAt(int index) {
-    if (_queue.isEmpty) return;
-    final clampedIndex = index.clamp(0, _queue.length - 1);
-    _currentIndex = clampedIndex;
-    _currentVideo = _queue[_currentIndex];
-    _isPlaying = true;
-    _shuffleHistory.add(clampedIndex);
-    _unplayedShuffleIndices.remove(clampedIndex);
-    _saveToHistory();
+    if (index < 0 || index >= _queue.length) return;
+    _currentIndex = index;
+    _currentVideo = _queue[index];
     notifyListeners();
+    _saveToHistory(_currentVideo!);
     _loadAndPlayAudio(_currentVideo!);
   }
 
   void playNext() {
     if (_queue.isEmpty) return;
 
-    if (_repeatMode == RepeatMode.one) {
-      playAt(_currentIndex);
+    if (_repeatMode == RepeatMode.one && _currentVideo != null) {
+      seek(Duration.zero);
+      if (!_isPlaying) togglePlay();
       return;
     }
 
     if (_isShuffled) {
-      if (_unplayedShuffleIndices.isEmpty) {
-        if (_repeatMode == RepeatMode.all || _currentPlaylistId != null) {
-          _generateShuffleQueue();
-        } else {
-          _fetchAndPlayRelated();
-          return;
-        }
+      final nextIdx = _getNextShuffleIndex();
+      if (nextIdx != null) {
+        playAt(nextIdx);
+        return;
       }
-      if (_unplayedShuffleIndices.isNotEmpty) {
-        playAt(_unplayedShuffleIndices.first);
-      } else {
-        playAt(0);
-      }
-      return;
     }
 
     if (_currentIndex < _queue.length - 1) {
       playAt(_currentIndex + 1);
+    } else if (_repeatMode == RepeatMode.all) {
+      playAt(0);
     } else {
-      // End of queue
-      if (_repeatMode == RepeatMode.all) {
-        playAt(0);
-      } else if (_currentPlaylistId != null) {
-        // Logika Circular Linked List untuk Playlist
-        playAt(0);
-      } else {
-        // Autoplay: fetch related videos hanya jika dari pencarian tunggal
-        _fetchAndPlayRelated();
-      }
+      _autoSuggestAndPlayNext();
     }
   }
 
   void playPrevious() {
     if (_queue.isEmpty) return;
 
-    if (_repeatMode == RepeatMode.one) {
-      playAt(_currentIndex);
+    if (_currentPosition.inSeconds > 3) {
+      seek(Duration.zero);
       return;
     }
 
     if (_isShuffled && _shuffleHistory.length > 1) {
       _shuffleHistory.removeLast();
-      final prevIndex = _shuffleHistory.last;
-      _shuffleHistory.removeLast();
-      playAt(prevIndex);
+      final prevIdx = _shuffleHistory.last;
+      playAt(prevIdx);
       return;
     }
 
     if (_currentIndex > 0) {
       playAt(_currentIndex - 1);
-    } else if (_repeatMode == RepeatMode.all || _currentPlaylistId != null) {
-      playAt(_queue.length - 1);
+    } else {
+      seek(Duration.zero);
     }
   }
 
   int _consecutiveSuggestFailures = 0;
 
-  /// Fitur Autoplay (Radio Mode) - Menambahkan lagu terkait saat antrean habis
-    /// Fitur Autoplay (Radio Mode) - Menambahkan lagu terkait saat antrean habis dengan Anti-Duplikat AI
-  Future<void> _fetchAndPlayRelated() async {
-    if (_currentVideo == null || _isLoadingAudio) return;
-    
-    final currentVid = _currentVideo!;
-    final currentTitleClean = currentVid.title
-        .replaceAll(RegExp(r'\(.*?\)|\[.*?\]', caseSensitive: false), '')
-        .replaceAll(RegExp(r'official\s*(video|audio|lyrics|music video)?', caseSensitive: false), '')
-        .trim().toLowerCase();
-
-    _isLoadingAudio = true;
-    notifyListeners();
+  Future<void> _autoSuggestAndPlayNext() async {
+    if (_currentVideo == null) return;
+    if (_consecutiveSuggestFailures >= 3) {
+      debugPrint('[Player] Terlalu banyak kegagalan auto-suggest, hentikan autoplay.');
+      _isPlaying = false;
+      notifyListeners();
+      return;
+    }
 
     try {
+      _isLoadingAudio = true;
+      notifyListeners();
+
       List<VideoItem> candidates = [];
-      
-      debugPrint('[Player] ðŸ¤– Meminta AI menyarankan lagu berikutnya yang serupa & berbeda...');
-      final suggestion = await AiService().recommendNextSong(currentVid.title, currentVid.channelTitle);
-      
-      if (suggestion != null && suggestion.isNotEmpty) {
-         debugPrint('[Player] ðŸŽ¯ AI Rekomendasi: $suggestion');
-         final aiResults = await YoutubeService().searchVideos(suggestion, maxResults: 5);
-         if (aiResults.isNotEmpty) {
-            candidates.addAll(aiResults);
-         }
-      }
-
-      // Fallback ke YouTube related videos jika AI gagal
-      if (candidates.isEmpty) {
-        debugPrint('[Player] ðŸ”„ Fallback ke YouTube related videos...');
-        final relatedResults = await YoutubeService().getRelatedVideos(currentVid, maxResults: 10);
-        candidates.addAll(relatedResults);
-      }
-
-      // Filter Anti-Duplikat:
-      // 1. Bukan videoId yang sama
-      // 2. Judul lagu tidak boleh sama persis dengan lagu saat ini (mencegah re-upload dari channel lain)
-      // 3. Belum ada di antrean saat ini
-      final existingIds = _queue.map((v) => v.videoId).toSet();
-      existingIds.add(currentVid.videoId);
-
-      VideoItem? bestCandidate;
-      for (final candidate in candidates) {
-        if (existingIds.contains(candidate.videoId)) continue;
-
-        final candidateTitleClean = candidate.title
-            .replaceAll(RegExp(r'\(.*?\)|\[.*?\]', caseSensitive: false), '')
-            .replaceAll(RegExp(r'official\s*(video|audio|lyrics|music video)?', caseSensitive: false), '')
-            .trim().toLowerCase();
-
-        // Jika judul lagu sangat mirip (re-upload), lewati!
-        if (candidateTitleClean == currentTitleClean || 
-           (currentTitleClean.length > 5 && candidateTitleClean.contains(currentTitleClean))) {
-          debugPrint('[Player] â­ï¸ Melewati lagu duplikat: ${candidate.title}');
-          continue;
-        }
-
-        bestCandidate = candidate;
-        break;
-      }
-
-      // Jika semua kandidat terfilter, ambil kandidat pertama yang beda videoId
-      if (bestCandidate == null && candidates.isNotEmpty) {
-        bestCandidate = candidates.firstWhere(
-          (c) => c.videoId != currentVid.videoId,
-          orElse: () => candidates.first,
+      try {
+        final aiSuggestions = await AiService().getSmartRecommendations(
+          currentTrack: '${_currentVideo!.title} ${_currentVideo!.channelTitle}',
+          recentHistory: _queue.take(5).map((v) => '${v.title} ${v.channelTitle}').toList(),
         );
+
+        if (aiSuggestions.isNotEmpty) {
+          for (final songQuery in aiSuggestions.take(3)) {
+            final searchResults = await YoutubeService().search(songQuery);
+            if (searchResults.isNotEmpty) {
+              candidates.add(searchResults.first);
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('[Player] AI Suggest error: $e');
       }
 
-      if (bestCandidate != null) {
-        debugPrint('[Player] ðŸŽ¶ Menambahkan ke antrean autoplay: ${bestCandidate.title} - ${bestCandidate.channelTitle}');
+      if (candidates.isEmpty) {
+        final related = await YoutubeService().getRelatedVideos(_currentVideo!.videoId);
+        candidates.addAll(related);
+      }
+
+      final existingIds = _queue.map((v) => v.videoId).toSet();
+      final filtered = candidates.where((v) => !existingIds.contains(v.videoId)).toList();
+
+      if (filtered.isNotEmpty) {
+        final bestCandidate = filtered.first;
         addToQueue(bestCandidate);
         playAt(_queue.length - 1);
         _consecutiveSuggestFailures = 0;
@@ -290,55 +296,32 @@ class PlayerService extends ChangeNotifier {
     }
   }
 
-  /// Memulihkan stream jika terputus tiba-tiba (Premature EOF)
-  Future<void> _recoverPlayback() async {
-    if (_currentVideo == null || _audioHandler == null) return;
-    
-    // Simpan posisi terakhir
-    final position = _audioHandler!.player.position;
-    debugPrint('[Player] ðŸ”„ Mencoba memulihkan stream pada posisi $position...');
-    
-    _isLoadingAudio = true;
-    notifyListeners();
-    
-    try {
-      _loadId++;
-      final currentLoadId = _loadId;
-      // Coba load stream baru dari YouTube
-      await _streamFromYouTube(_currentVideo!, currentLoadId);
-      // Setelah berhasil load URL dan play dipanggil di _streamFromYouTube, 
-      // kita seek ke posisi terakhir
-      await _audioHandler!.player.seek(position);
-      debugPrint('[Player] âœ… Berhasil memulihkan stream');
-    } catch (e) {
-      debugPrint('[Player] âŒ Gagal memulihkan stream: $e');
-      // Jika gagal pulih, terpaksa skip
-      if (hasNext) {
-         playNext();
-      } else {
-         _isPlaying = false;
-         notifyListeners();
-      }
-    } finally {
-      _isLoadingAudio = false;
-      notifyListeners();
-    }
-  }
-
   void stop() {
     _currentVideo = null;
     _currentIndex = -1;
     _isPlaying = false;
+    _isPlayingOffline = false;
+    YoutubePlayerEngine().stop();
     _audioHandler?.stop();
     notifyListeners();
   }
 
   void togglePlay() {
-    if (_audioHandler == null) return;
-    if (_isPlaying) {
-      _audioHandler!.pause();
+    if (_isPlayingOffline) {
+      if (_isPlaying) {
+        _audioHandler?.pause();
+      } else {
+        _audioHandler?.play();
+      }
     } else {
-      _audioHandler!.play();
+      if (_isPlaying) {
+        YoutubePlayerEngine().pause();
+        _isPlaying = false;
+      } else {
+        YoutubePlayerEngine().play();
+        _isPlaying = true;
+      }
+      notifyListeners();
     }
   }
 
@@ -351,51 +334,73 @@ class PlayerService extends ChangeNotifier {
 
   void toggleShuffle() {
     _isShuffled = !_isShuffled;
-    if (_isShuffled) _generateShuffleQueue();
+    _initShuffleIndices();
     notifyListeners();
-  }
-
-  void setShuffle(bool enable) {
-    if (_isShuffled != enable) {
-      _isShuffled = enable;
-      if (_isShuffled) _generateShuffleQueue();
-      notifyListeners();
-    }
-  }
-
-  void _generateShuffleQueue() {
-    _unplayedShuffleIndices = List.generate(_queue.length, (i) => i);
-    _unplayedShuffleIndices.remove(_currentIndex);
-    _unplayedShuffleIndices.shuffle();
   }
 
   void cycleRepeatMode() {
-    switch (_repeatMode) {
-      case RepeatMode.none:
-        _repeatMode = RepeatMode.all;
-        break;
-      case RepeatMode.all:
-        _repeatMode = RepeatMode.one;
-        break;
-      case RepeatMode.one:
-        _repeatMode = RepeatMode.none;
-        break;
-    }
-    // Sinkronkan ke just_audio LoopMode agar repeat benar-benar aktif
-    _syncLoopMode();
+    _repeatMode = switch (_repeatMode) {
+      RepeatMode.none => RepeatMode.all,
+      RepeatMode.all  => RepeatMode.one,
+      RepeatMode.one  => RepeatMode.none,
+    };
     notifyListeners();
   }
 
-  /// Sinkronkan _repeatMode ke just_audio LoopMode
-  void _syncLoopMode() {
-    if (_audioHandler == null) return;
-    final loopMode = switch (_repeatMode) {
-      RepeatMode.none => LoopMode.off,
-      RepeatMode.all  => LoopMode.all,
-      RepeatMode.one  => LoopMode.one,
-    };
-    _audioHandler!.player.setLoopMode(loopMode);
-    debugPrint('[Player] LoopMode set to: $loopMode');
+  void seek(Duration position) {
+    _currentPosition = position;
+    _positionController.add(position);
+    if (_isPlayingOffline) {
+      _audioHandler?.player.seek(position);
+    } else {
+      YoutubePlayerEngine().seekTo(position);
+    }
+    notifyListeners();
+  }
+
+  void addToQueue(VideoItem video) {
+    _queue.add(video);
+    _initShuffleIndices();
+    notifyListeners();
+  }
+
+  void playNextInQueue(VideoItem video) {
+    if (_queue.isEmpty) {
+      playVideo(video);
+      return;
+    }
+    _queue.insert(_currentIndex + 1, video);
+    _initShuffleIndices();
+    notifyListeners();
+  }
+
+  void clearQueue() {
+    if (_currentVideo != null) {
+      _queue = [_currentVideo!];
+      _currentIndex = 0;
+    } else {
+      _queue.clear();
+      _currentIndex = -1;
+    }
+    _initShuffleIndices();
+    notifyListeners();
+  }
+
+  void reorderQueue(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= _queue.length ||
+        newIndex < 0 || newIndex > _queue.length) return;
+    if (oldIndex < newIndex) newIndex -= 1;
+    final item = _queue.removeAt(oldIndex);
+    _queue.insert(newIndex, item);
+    if (oldIndex == _currentIndex) {
+      _currentIndex = newIndex;
+    } else if (oldIndex < _currentIndex && newIndex >= _currentIndex) {
+      _currentIndex -= 1;
+    } else if (oldIndex > _currentIndex && newIndex <= _currentIndex) {
+      _currentIndex += 1;
+    }
+    _initShuffleIndices();
+    notifyListeners();
   }
 
   void toggleAudioFocusMode() {
@@ -412,21 +417,14 @@ class PlayerService extends ChangeNotifier {
       if (_queue.isNotEmpty) {
         playAt(_currentIndex.clamp(0, _queue.length - 1));
       } else {
-        _currentVideo = null;
-        _currentIndex = -1;
-        _isPlaying = false;
-        _audioHandler?.stop();
+        stop();
       }
     }
     notifyListeners();
   }
 
-  int _consecutiveFailures = 0;
+  // ─── Private ───────────────────────────────
 
-  // â”€â”€â”€ Private â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-  /// Extract audio stream URL via youtube_explode_dart and play via just_audio.
-  /// Priority: local file â†’ YouTube muxed stream â†’ YouTube audio-only fallback.
   Future<void> _loadAndPlayAudio(VideoItem video) async {
     if (_audioHandler == null) return;
 
@@ -442,243 +440,106 @@ class PlayerService extends ChangeNotifier {
       bool playedOffline = false;
 
       if (downloaded != null && File(downloaded.localPath).existsSync()) {
-        debugPrint('[Player] ðŸŽµ Mencoba memutar dari file lokal: ${downloaded.localPath}');
+        debugPrint('[Player] 🎵 Memutar dari file offline: ${downloaded.localPath}');
         final mediaItem = _buildMediaItem(video);
         if (_loadId != currentLoadId) return;
         try {
+          await YoutubePlayerEngine().stop();
           await _audioHandler!.loadUrl(downloaded.localPath, mediaItem);
           if (_loadId != currentLoadId) return;
-          
-          final duration = _audioHandler!.player.duration;
-          if (duration == null || duration.inSeconds == 0) {
-             throw Exception('Durasi file offline 0, kemungkinan file rusak.');
-          }
 
           _audioHandler!.play();
+          _isPlayingOffline = true;
           playedOffline = true;
+          _isPlaying = true;
         } catch (e) {
-          debugPrint('[Player] âš ï¸ File lokal gagal dimuat, file mungkin korup atau format tidak didukung. Fallback ke streaming. Error: $e');
+          debugPrint('[Player] Offline file load failed, fallback to YouTube: $e');
           playedOffline = false;
         }
-      } 
-      
-      if (!playedOffline) {
-        if (_loadId != currentLoadId) return;
-        // 2. Stream dari YouTube jika tidak ada file offline atau file lokal gagal
-        await _streamFromYouTube(video, currentLoadId);
       }
 
-      // Berhasil
-      if (_loadId == currentLoadId) _consecutiveFailures = 0;
+      if (!playedOffline) {
+        if (_loadId != currentLoadId) return;
+        _isPlayingOffline = false;
+        await _audioHandler!.player.stop();
+
+        final mediaItem = _buildMediaItem(video);
+        _audioHandler!.mediaItem.add(mediaItem);
+        _audioHandler!.playbackState.add(
+          _audioHandler!.playbackState.value.copyWith(
+            processingState: AudioProcessingState.ready,
+            playing: true,
+          ),
+        );
+
+        debugPrint('[Player] 🚀 Streaming YouTube Video via HTML5 Player: ${video.title} (${video.videoId})');
+        await YoutubePlayerEngine().loadVideo(video.videoId);
+        _isPlaying = true;
+      }
     } catch (e) {
-      _consecutiveFailures++;
-      debugPrint('[Player] AudioLoad error: $e (failures: $_consecutiveFailures)');
+      debugPrint('[Player] AudioLoad error: $e');
       _isPlaying = false;
       _currentVideo = null;
       notifyListeners();
-      
-      if (_consecutiveFailures >= 3) {
-        debugPrint('[Player] Terlalu banyak kegagalan, hentikan skip otomatis.');
-        return; // Jangan skip lagi
-      }
-      
-      // Auto-skip ke lagu selanjutnya jika gagal total
-      if (hasNext) {
-        debugPrint('[Player] Auto-skipping to next track due to error...');
-        playNext();
-      }
     } finally {
       _isLoadingAudio = false;
       notifyListeners();
     }
   }
 
-
-  /// Ambil stream URL dari YouTube dan mulai pemutaran.
-  /// Menggunakan Innertube API (ViMusic/InnerTune style) yang memprioritaskan itag 140 (m4a/AAC).
-  Future<void> _streamFromYouTube(VideoItem video, int currentLoadId, {int maxAttempts = 3}) async {
-    debugPrint('[Player] ðŸŒ Fetching stream for: ${video.title} (${video.videoId})');
-    Exception? lastError;
-
-    final configs = [
-      // 1. Android Client (itag 140 AAC)
-      (
-        'ANDROID',
-        'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
-        {
-          'clientName': 'ANDROID',
-          'clientVersion': '20.10.38',
-          'androidSdkVersion': 30,
-          'userAgent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
-          'hl': 'en',
-          'gl': 'US',
-        }
-      ),
-      // 2. iOS Client (itag 140 AAC)
-      (
-        'IOS',
-        'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-        {
-          'clientName': 'IOS',
-          'clientVersion': '20.10.4',
-          'deviceModel': 'iPhone16,2',
-          'userAgent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
-          'hl': 'en',
-          'gl': 'US',
-        }
-      ),
-    ];
-
-    final httpClient = http.Client();
-
-    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-      if (_loadId != currentLoadId) {
-        httpClient.close();
-        return;
-      }
-
-      for (final (clientName, userAgent, clientContext) in configs) {
-        if (_loadId != currentLoadId) {
-          httpClient.close();
-          return;
-        }
-
-        try {
-          debugPrint('[Player] ðŸš€ [Attempt $attempt] Innertube $clientName client...');
-          final body = json.encode({
-            'context': {'client': clientContext},
-            'videoId': video.videoId,
-            'playbackContext': {
-              'contentPlaybackContext': {
-                'html5Preference': 'HTML5_PREF_WANTS',
-                'signatureTimestamp': 19800,
-              }
-            }
-          });
-
-          final resp = await httpClient.post(
-            Uri.parse('https://www.youtube.com/youtubei/v1/player'),
-            headers: {
-              'User-Agent': userAgent,
-              'Content-Type': 'application/json',
-            },
-            body: body,
-          ).timeout(const Duration(seconds: 8));
-
-          if (resp.statusCode == 200) {
-            final data = json.decode(resp.body) as Map<String, dynamic>;
-            final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
-            final audioStreams = formats.where((f) {
-              final mime = f['mimeType'] as String? ?? '';
-              return mime.startsWith('audio/') && f['url'] != null;
-            }).toList();
-
-            if (audioStreams.isNotEmpty) {
-              // Prioritas 1: itag 140 (audio/mp4 m4a AAC) - paling stabil di ExoPlayer Android
-              audioStreams.sort((a, b) {
-                final aIs140 = (a['itag'] == 140) ? 1 : 0;
-                final bIs140 = (b['itag'] == 140) ? 1 : 0;
-                if (aIs140 != bIs140) return bIs140.compareTo(aIs140);
-                return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
-              });
-
-              final chosen = audioStreams.first;
-              // Tambah parameter ratebypass agar YouTube CDN tidak reject (403)
-              // YouTube Android app selalu kirim parameter ini saat streaming audio
-              final rawUrl = chosen['url'] as String;
-              final streamUrl = rawUrl.contains('?')
-                  ? '$rawUrl&rn=1&rbuf=0&ratebypass=yes'
-                  : '$rawUrl?rn=1&rbuf=0&ratebypass=yes';
-              final bitrate = chosen['bitrate'];
-              final itag = chosen['itag'];
-              final mime = chosen['mimeType'];
-              
-              debugPrint('[Player] ðŸŽ§ Innertube $clientName selected: itag $itag ($mime, $bitrate bps)');
-
-              if (_loadId != currentLoadId) {
-                httpClient.close();
-                return;
-              }
-
-              final mediaItem = _buildMediaItem(video);
-              await _audioHandler!.loadUrl(
-                streamUrl,
-                mediaItem,
-                headers: {'User-Agent': userAgent},
-              );
-              
-              if (_loadId != currentLoadId) {
-                httpClient.close();
-                return;
-              }
-              
-              _audioHandler!.play();
-              httpClient.close();
-              return; // Sukses!
-            }
-          }
-        } catch (e) {
-          debugPrint('[Player] âš ï¸ Innertube $clientName failed: $e');
-          lastError = Exception('Innertube $clientName: $e');
-        }
-      }
-
-      if (attempt < maxAttempts) {
-        await Future.delayed(Duration(milliseconds: 300 * attempt));
-      }
-    }
-
-    httpClient.close();
-    debugPrint('[Player] All Innertube failed, trying youtube_explode_dart fallback...');
-    try {
-      final manifest = await _yt.videos.streamsClient.getManifest(video.videoId);
-      final ytAudioStreams = manifest.audioOnly.toList();
-      if (ytAudioStreams.isNotEmpty) {
-        ytAudioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-        final ytStream = ytAudioStreams.first;
-        final ytUrl = ytStream.url.toString();
-        debugPrint('[Player] YT-Explode fallback: ${ytStream.codec.mimeType} ${ytStream.bitrate}');
-        if (_loadId != currentLoadId) return;
-        final mediaItem = _buildMediaItem(video);
-        await _audioHandler!.loadUrl(ytUrl, mediaItem);
-        if (_loadId != currentLoadId) return;
-        _audioHandler!.play();
-        return;
-      }
-    } catch (ytEx) {
-      debugPrint('[Player] YT-Explode also failed: $ytEx');
-    }
-    throw lastError ?? Exception('Gagal memuat stream audio.');
-  }
-
-  /// Buat MediaItem dari VideoItem
   MediaItem _buildMediaItem(VideoItem video) {
     return MediaItem(
       id: video.videoId,
       title: video.title,
       artist: video.channelTitle,
-      artUri: Uri.parse(video.thumbnailHighRes),
       duration: video.durationSeconds > 0
           ? Duration(seconds: video.durationSeconds)
+          : null,
+      artUri: video.thumbnailUrl.isNotEmpty
+          ? Uri.parse(video.thumbnailUrl)
           : null,
     );
   }
 
-  Future<void> _saveToHistory() async {
-    if (_currentVideo == null) return;
-    final history = PlayHistory.fromVideoItem(
-      _currentVideo!,
-      playlistId: _currentPlaylistId,
+  void _saveToHistory(VideoItem video) {
+    DbService().insertHistory(
+      PlayHistory(
+        videoId: video.videoId,
+        title: video.title,
+        channelTitle: video.channelTitle,
+        thumbnailUrl: video.thumbnailUrl,
+        playedAt: DateTime.now(),
+        durationSeconds: video.durationSeconds,
+      ),
     );
-    await DbService().upsertHistory(history);
     onHistoryUpdated?.call();
+  }
+
+  void _initShuffleIndices() {
+    _shuffleHistory = [_currentIndex];
+    _unplayedShuffleIndices = List.generate(_queue.length, (i) => i)
+      ..remove(_currentIndex)
+      ..shuffle();
+  }
+
+  int? _getNextShuffleIndex() {
+    if (_unplayedShuffleIndices.isEmpty) {
+      if (_repeatMode == RepeatMode.all) {
+        _initShuffleIndices();
+      } else {
+        return null;
+      }
+    }
+    final next = _unplayedShuffleIndices.removeAt(0);
+    _shuffleHistory.add(next);
+    return next;
   }
 
   @override
   void dispose() {
+    _positionController.close();
+    _durationController.close();
     _yt.close();
     super.dispose();
   }
 }
-
-

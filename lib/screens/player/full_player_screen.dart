@@ -1,4 +1,4 @@
-// lib/screens/player/full_player_screen.dart
+﻿// lib/screens/player/full_player_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -214,12 +214,11 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
                 const SizedBox(height: 20),
 
                 // ── Progress Bar & Timestamps ────────────────
-                if (audioPlayer != null)
-                  StreamBuilder<Duration>(
-                    stream: audioPlayer.positionStream,
+                StreamBuilder<Duration>(
+                    stream: player.positionStream,
                     builder: (context, snapshot) {
                       final position = snapshot.data ?? Duration.zero;
-                      final totalDuration = audioPlayer.duration ??
+                      final totalDuration = player.duration ??
                           (currentVideo.durationSeconds > 0
                               ? Duration(seconds: currentVideo.durationSeconds)
                               : Duration.zero);
@@ -246,7 +245,7 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
                               value: currentSeconds,
                               max: maxSeconds,
                               onChanged: (value) {
-                                audioPlayer.seek(Duration(seconds: value.toInt()));
+                                player.seek(Duration(seconds: value.toInt()));
                               },
                             ),
                           ),
@@ -464,3 +463,4 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
     );
   }
 }
+

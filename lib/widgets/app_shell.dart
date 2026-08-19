@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
+import '../services/youtube_player_engine.dart';
 import '../theme/app_theme.dart';
 
 class AppShell extends ConsumerWidget {
@@ -22,6 +24,31 @@ class AppShell extends ConsumerWidget {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
+          // Background audio webview engine (0 opacity / offscreen)
+          Positioned(
+            left: -9999,
+            top: -9999,
+            width: 1,
+            height: 1,
+            child: SizedBox(
+              width: 1,
+              height: 1,
+              child: InAppWebView(
+                initialSettings: InAppWebViewSettings(
+                  mediaPlaybackRequiresUserGesture: false,
+                  allowsInlineMediaPlayback: true,
+                  javaScriptEnabled: true,
+                  cacheEnabled: true,
+                  userAgent:
+                      'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                ),
+                onWebViewCreated: (controller) {
+                  YoutubePlayerEngine().attachController(controller);
+                },
+              ),
+            ),
+          ),
+
           navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
@@ -58,139 +85,160 @@ class _MusicMiniPlayer extends StatelessWidget {
       },
       background: Container(
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.red.withValues(alpha: 0.3),
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.red.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(14),
         ),
         alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(left: 20),
-        child: const Icon(Icons.close_rounded, color: Colors.white70, size: 24),
+        child: const Row(
+          children: [
+            Icon(Icons.close_rounded, color: Colors.white, size: 24),
+            SizedBox(width: 8),
+            Text('Tutup Pemutar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+          ],
+        ),
       ),
       secondaryBackground: Container(
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.red.withValues(alpha: 0.3),
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.red.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(14),
         ),
         alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        child: const Icon(Icons.close_rounded, color: Colors.white70, size: 24),
-      ),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        height: 60,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E1E2E),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.5),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text('Tutup Pemutar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+            SizedBox(width: 8),
+            Icon(Icons.close_rounded, color: Colors.white, size: 24),
           ],
         ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: () {
-              context.push('/player', extra: video);
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Row(
-                children: [
-                  // Album Art
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: CachedNetworkImage(
-                      imageUrl: video.thumbnailUrl,
-                      width: 44,
-                      height: 44,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) => Container(color: AppTheme.surfaceVariant),
-                      errorWidget: (_, __, ___) => const Icon(Icons.music_note, color: Colors.white),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-
-                  // Title & Artist
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          video.title,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          video.channelTitle,
-                          style: const TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 11,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Play/Pause Button
-                  IconButton(
-                    icon: Icon(
-                      player.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 28,
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                    onPressed: () {
-                      player.togglePlay();
-                    },
-                  ),
-
-                  // Next Button
-                  IconButton(
-                    icon: const Icon(
-                      Icons.skip_next_rounded,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                    onPressed: () {
-                      player.playNext();
-                    },
-                  ),
-
-                  // Close / Dismiss Button
-                  IconButton(
-                    icon: const Icon(
-                      Icons.close_rounded,
-                      color: AppTheme.textMuted,
-                      size: 18,
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 36),
-                    tooltip: 'Tutup',
-                    onPressed: () {
-                      player.stop();
-                    },
-                  ),
-                ],
-              ),
+      ),
+      child: GestureDetector(
+        onTap: () {
+          context.push('/player', extra: video);
+        },
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppTheme.surface.withOpacity(0.96),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.12),
+              width: 0.8,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              // Thumbnail
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: CachedNetworkImage(
+                  imageUrl: video.thumbnailUrl,
+                  width: 44,
+                  height: 44,
+                  fit: BoxFit.cover,
+                  errorWidget: (_, __, ___) => Container(
+                    width: 44,
+                    height: 44,
+                    color: AppTheme.surfaceVariant,
+                    child: const Icon(Icons.music_note, color: AppTheme.textMuted, size: 22),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+
+              // Title & Artist
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      video.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      video.channelTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Controls
+              if (player.isLoadingAudio)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.0),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                )
+              else
+                IconButton(
+                  icon: Icon(
+                    player.isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    color: AppTheme.primary,
+                    size: 28,
+                  ),
+                  onPressed: () => player.togglePlay(),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                ),
+
+              IconButton(
+                icon: const Icon(
+                  Icons.skip_next_rounded,
+                  color: AppTheme.textSecondary,
+                  size: 24,
+                ),
+                onPressed: player.hasNext ? () => player.playNext() : null,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+
+              // Close / Dismiss button
+              IconButton(
+                icon: const Icon(
+                  Icons.close_rounded,
+                  color: AppTheme.textMuted,
+                  size: 20,
+                ),
+                onPressed: () => player.stop(),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: 'Tutup',
+              ),
+            ],
           ),
         ),
       ),
@@ -199,7 +247,7 @@ class _MusicMiniPlayer extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// Bottom Navigation Bar (4 Tabs: Beranda, Cari, Library, Profil)
+// Bottom Nav Bar
 // ─────────────────────────────────────────────
 class _BottomNavBar extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
@@ -209,42 +257,45 @@ class _BottomNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        color: AppTheme.background,
-        border: Border(top: BorderSide(color: AppTheme.divider, width: 0.5)),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        border: Border(
+          top: BorderSide(
+            color: Colors.white.withOpacity(0.08),
+            width: 0.5,
+          ),
+        ),
       ),
       child: NavigationBar(
-        backgroundColor: AppTheme.background,
-        indicatorColor: const Color(0xFF28244C),
         selectedIndex: navigationShell.currentIndex,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        height: 64,
         onDestinationSelected: (index) {
           navigationShell.goBranch(
             index,
             initialLocation: index == navigationShell.currentIndex,
           );
         },
+        backgroundColor: Colors.transparent,
+        indicatorColor: AppTheme.primary.withOpacity(0.18),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded, color: AppTheme.primaryLight),
-            label: 'Beranda',
+            selectedIcon: Icon(Icons.home_rounded, color: AppTheme.primary),
+            label: 'Home',
           ),
           NavigationDestination(
-            icon: Icon(Icons.search_rounded),
-            selectedIcon: Icon(Icons.search_rounded, color: AppTheme.primaryLight),
+            icon: Icon(Icons.search_outlined),
+            selectedIcon: Icon(Icons.search_rounded, color: AppTheme.primary),
             label: 'Cari',
           ),
           NavigationDestination(
             icon: Icon(Icons.library_music_outlined),
-            selectedIcon: Icon(Icons.library_music_rounded, color: AppTheme.primaryLight),
+            selectedIcon: Icon(Icons.library_music_rounded, color: AppTheme.primary),
             label: 'Library',
           ),
           NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded, color: AppTheme.primaryLight),
-            label: 'Profil',
+            icon: Icon(Icons.download_outlined),
+            selectedIcon: Icon(Icons.download_done_rounded, color: AppTheme.primary),
+            label: 'Download',
           ),
         ],
       ),
