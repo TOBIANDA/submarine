@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:http/http.dart' as http;
 // lib/services/audio_handler.dart
 import 'package:audio_service/audio_service.dart';
@@ -91,46 +92,26 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   AudioPlayer get player => _player;
 
   // ─── Load audio from URL ──────────────────────────────
-    Future<void> loadAudioSource(AudioSource source, MediaItem item) async {
+      Future<void> loadUrl(String url, MediaItem item, {Map<String, String>? headers}) async {
     _isChangingTrack = true;
     mediaItem.add(item);
+
     try {
-      await _player.setAudioSource(source, preload: true);
+      await _player.setAudioSource(
+        AudioSource.uri(
+          url.startsWith('http') ? Uri.parse(url) : Uri.file(url),
+          headers: url.startsWith('http') ? (headers ?? {
+            'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip',
+          }) : null,
+        ),
+        preload: true,
+      );
     } catch (e) {
       _isChangingTrack = false;
       playbackState.add(playbackState.value.copyWith(
         processingState: AudioProcessingState.error,
       ));
       rethrow;
-    }
-  }
-
-  Future<void> loadUrl(String url, MediaItem item, {String? userAgent, int? size, String? mime}) async {
-    if (url.startsWith('http') && size != null && size > 0) {
-      final source = YouTubeStreamAudioSource(
-        streamUrl: Uri.parse(url),
-        totalBytes: size,
-        mimeType: mime ?? 'audio/webm',
-        tag: item,
-      );
-      await loadAudioSource(source, item);
-    } else {
-      _isChangingTrack = true;
-      mediaItem.add(item);
-      try {
-        await _player.setAudioSource(
-          AudioSource.uri(
-            url.startsWith('http') ? Uri.parse(url) : Uri.file(url),
-          ),
-          preload: true,
-        );
-      } catch (e) {
-        _isChangingTrack = false;
-        playbackState.add(playbackState.value.copyWith(
-          processingState: AudioProcessingState.error,
-        ));
-        rethrow;
-      }
     }
   }
 
@@ -225,38 +206,4 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
 }
 
 
-class YouTubeStreamAudioSource extends StreamAudioSource {
-  final Uri streamUrl;
-  final int totalBytes;
-  final String mimeType;
 
-  YouTubeStreamAudioSource({
-    required this.streamUrl,
-    required this.totalBytes,
-    required this.mimeType,
-    dynamic tag,
-  }) : super(tag: tag);
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    start ??= 0;
-    end ??= totalBytes;
-    final rangeEnd = end > 0 ? end - 1 : 0;
-
-    final requestHeaders = <String, String>{
-      'Range': 'bytes=$start-$rangeEnd',
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36',
-    };
-
-    final req = http.Request('GET', streamUrl)..headers.addAll(requestHeaders);
-    final response = await http.Client().send(req);
-
-    return StreamAudioResponse(
-      sourceLength: totalBytes,
-      contentLength: end - start,
-      offset: start,
-      stream: response.stream,
-      contentType: mimeType,
-    );
-  }
-}

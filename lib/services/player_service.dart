@@ -1,3 +1,5 @@
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
@@ -485,64 +487,145 @@ class PlayerService extends ChangeNotifier {
 
 
   /// Ambil stream URL dari YouTube dan mulai pemutaran.
-  /// Menggunakan androidSdkless dan Dart HTTP proxy (StreamAudioSource) untuk bebas 403.
+  /// Menggunakan Innertube Android Engine (arsitektur ViMusic/InnerTune) yang langsung memberikan direct URL bebas 403.
   Future<void> _streamFromYouTube(VideoItem video, int currentLoadId, {int maxAttempts = 3}) async {
-    debugPrint('[Player] 🌐 Fetching stream for: ${video.title}');
+    debugPrint('[Player] 🌐 Fetching stream for: ${video.title} (${video.videoId})');
     Exception? lastError;
 
-    final clientsToTry = <List<YoutubeApiClient>?>[
-      [YoutubeApiClient.androidSdkless],
-      [YoutubeApiClient.android],
-      null,
-    ];
+    const androidUA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+    final httpClient = http.Client();
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-      if (_loadId != currentLoadId) return;
-      final clients = clientsToTry[(attempt - 1) % clientsToTry.length];
-      try {
-        final manifest = await _yt.videos.streamsClient
-            .getManifest(video.videoId, ytClients: clients)
-            .timeout(const Duration(seconds: 20));
+      if (_loadId != currentLoadId) {
+        httpClient.close();
+        return;
+      }
 
-        if (_loadId != currentLoadId) return;
+      // ── Method 1: Innertube Android API (ViMusic / InnerTune Architecture) ──
+      try {
+        debugPrint('[Player] 🚀 [Attempt $attempt] Requesting stream from Innertube Android API...');
+        final body = json.encode({
+          'context': {
+            'client': {
+              'clientName': 'ANDROID',
+              'clientVersion': '20.10.38',
+              'androidSdkVersion': 30,
+              'userAgent': androidUA,
+              'hl': 'en',
+              'gl': 'US',
+            }
+          },
+          'videoId': video.videoId,
+          'playbackContext': {
+            'contentPlaybackContext': {
+              'html5Preference': 'HTML5_PREF_WANTS',
+              'signatureTimestamp': 19800,
+            }
+          }
+        });
+
+        final resp = await httpClient.post(
+          Uri.parse('https://www.youtube.com/youtubei/v1/player'),
+          headers: {
+            'User-Agent': androidUA,
+            'Content-Type': 'application/json',
+          },
+          body: body,
+        ).timeout(const Duration(seconds: 10));
+
+        if (resp.statusCode == 200) {
+          final data = json.decode(resp.body) as Map<String, dynamic>;
+          final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
+          final audioStreams = formats.where((f) {
+            final mime = f['mimeType'] as String? ?? '';
+            return mime.startsWith('audio/') && f['url'] != null;
+          }).toList();
+
+          if (audioStreams.isNotEmpty) {
+            // Urutkan berdasarkan bitrate tertinggi
+            audioStreams.sort((a, b) => ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0));
+            final bestAudio = audioStreams.first;
+            final streamUrl = bestAudio['url'] as String;
+            final bitrate = bestAudio['bitrate'];
+            final itag = bestAudio['itag'];
+            
+            debugPrint('[Player] 🎧 Innertube Success: itag $itag ($bitrate bps)');
+
+            if (_loadId != currentLoadId) {
+              httpClient.close();
+              return;
+            }
+
+            final mediaItem = _buildMediaItem(video);
+            await _audioHandler!.loadUrl(
+              streamUrl,
+              mediaItem,
+              headers: {'User-Agent': androidUA},
+            );
+            
+            if (_loadId != currentLoadId) {
+              httpClient.close();
+              return;
+            }
+            
+            _audioHandler!.play();
+            httpClient.close();
+            return; // Berhasil!
+          }
+        }
+      } catch (e) {
+        debugPrint('[Player] ⚠️ Innertube attempt $attempt failed: $e');
+        lastError = Exception('Innertube: $e');
+      }
+
+      // ── Method 2: Fallback via YoutubeExplode ──
+      try {
+        debugPrint('[Player] 🔄 [Attempt $attempt] Fallback to YoutubeExplode...');
+        final manifest = await _yt.videos.streamsClient
+            .getManifest(video.videoId, ytClients: [YoutubeApiClient.androidSdkless])
+            .timeout(const Duration(seconds: 12));
+
+        if (_loadId != currentLoadId) {
+          httpClient.close();
+          return;
+        }
 
         final audioStreams = manifest.audioOnly;
-        if (audioStreams.isEmpty) {
-          throw Exception('No audio streams found for attempt $attempt');
+        if (audioStreams.isNotEmpty) {
+          final audioInfo = audioStreams.withHighestBitrate();
+          final rawUrl = audioInfo.url.toString();
+          
+          debugPrint('[Player] 🎧 YoutubeExplode Success: ${audioInfo.container.name} (${audioInfo.bitrate})');
+
+          final mediaItem = _buildMediaItem(video);
+          await _audioHandler!.loadUrl(
+            rawUrl,
+            mediaItem,
+            headers: {'User-Agent': androidUA},
+          );
+
+          if (_loadId != currentLoadId) {
+            httpClient.close();
+            return;
+          }
+
+          _audioHandler!.play();
+          httpClient.close();
+          return; // Berhasil!
         }
-        final audioInfo = audioStreams.withHighestBitrate();
-        final rawUrl = audioInfo.url.toString();
-        final sizeBytes = audioInfo.size.totalBytes;
-        final mime = 'audio/${audioInfo.container.name}';
-        
-        debugPrint('[Player] 🎧 Attempt $attempt: ${audioInfo.container.name} (${audioInfo.bitrate}, ${sizeBytes} bytes)');
-
-        final mediaItem = _buildMediaItem(video);
-        await _audioHandler!.loadUrl(
-          rawUrl,
-          mediaItem,
-          size: sizeBytes,
-          mime: mime,
-        );
-        if (_loadId != currentLoadId) return;
-        _audioHandler!.play();
-        return; // sukses
-
-      } on TimeoutException catch (e) {
-        lastError = e;
-        debugPrint('[Player] ⏱ Attempt $attempt timeout');
       } catch (e) {
-        lastError = Exception(e.toString());
-        debugPrint('[Player] ❌ Attempt $attempt failed: $e');
+        debugPrint('[Player] ⚠️ YoutubeExplode attempt $attempt failed: $e');
+        lastError = Exception('YoutubeExplode: $e');
       }
 
       if (attempt < maxAttempts) {
-        await Future.delayed(Duration(milliseconds: 300 * attempt));
+        await Future.delayed(Duration(milliseconds: 400 * attempt));
       }
     }
 
-    debugPrint('[Player] 💀 All $maxAttempts attempts failed: $lastError');
-    throw lastError ?? Exception('Unknown streaming error');
+    httpClient.close();
+    debugPrint('[Player] 💀 All streaming attempts failed: $lastError');
+    throw lastError ?? Exception('Gagal memuat stream audio.');
   }
 
   /// Buat MediaItem dari VideoItem
