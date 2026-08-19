@@ -1,9 +1,71 @@
 ﻿// lib/services/audio_handler.dart
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
+
+/// Chunked StreamAudioSource for YouTube CDN streams to bypass open-ended Range 403
+class _YoutubeChunkedSource extends StreamAudioSource {
+  final String url;
+  final Map<String, String> requestHeaders;
+  static const int _chunkSize = 512 * 1024; // 512KB bounded chunks
+
+  _YoutubeChunkedSource({required this.url, required this.requestHeaders})
+      : super(tag: 'YoutubeChunked');
+
+  @override
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    final s = start ?? 0;
+    final chunkEnd = end != null ? end - 1 : s + _chunkSize - 1;
+
+    final headers = Map<String, String>.from(requestHeaders);
+    headers['Range'] = 'bytes=$s-$chunkEnd';
+
+    final client = http.Client();
+    try {
+      final request = http.Request('GET', Uri.parse(url));
+      request.headers.addAll(headers);
+      final response = await client.send(request);
+
+      if (response.statusCode >= 400) {
+        final body = await response.stream.bytesToString();
+        throw Exception('CDN ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 80))}');
+      }
+
+      int? rangeStart = s;
+      int? rangeEnd;
+      int? total;
+
+      final cr = response.headers['content-range'];
+      if (cr != null) {
+        final match = RegExp(r'bytes\s+(\d+)-(\d+)/(\d+|\*)').firstMatch(cr);
+        if (match != null) {
+          rangeStart = int.parse(match.group(1)!);
+          rangeEnd = int.parse(match.group(2)!) + 1;
+          if (match.group(3) != '*') total = int.parse(match.group(3)!);
+        }
+      }
+
+      final contentLength = rangeEnd != null
+          ? rangeEnd - rangeStart!
+          : response.contentLength;
+
+      return StreamAudioResponse(
+        sourceLength: total,
+        contentLength: contentLength,
+        offset: rangeStart ?? 0,
+        contentType: 'audio/mp4',
+        stream: response.stream.map((chunk) => Uint8List.fromList(chunk)),
+      );
+    } catch (e) {
+      client.close();
+      rethrow;
+    }
+  }
+}
 
 /// BackgroundAudioHandler – bridge between audio_service and just_audio.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
@@ -73,22 +135,20 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     mediaItem.add(item);
     try {
       AudioSource source;
-      if (url.startsWith('http')) {
+      if (url.contains('googlevideo.com') || url.startsWith('http')) {
         final effectiveHeaders = Map<String, String>.from(headers ?? {});
         if (!effectiveHeaders.containsKey('User-Agent')) {
           effectiveHeaders['User-Agent'] =
               'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
         }
-        debugPrint('[AudioHandler] Loading remote audio source with native streaming: $url');
-        source = AudioSource.uri(
-          Uri.parse(url),
-          headers: effectiveHeaders,
-        );
+        debugPrint('[AudioHandler] Loading chunked stream audio source...');
+        source = _YoutubeChunkedSource(url: url, requestHeaders: effectiveHeaders);
+        await _player.setAudioSource(source, preload: false);
       } else {
         debugPrint('[AudioHandler] Loading local file source: $url');
         source = AudioSource.uri(Uri.file(url));
+        await _player.setAudioSource(source, preload: true);
       }
-      await _player.setAudioSource(source, preload: false);
     } catch (e) {
       _isChangingTrack = false;
       playbackState.add(playbackState.value.copyWith(
