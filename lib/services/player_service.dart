@@ -6,6 +6,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'youtube_stream_source.dart';
 
 import '../models/video_item.dart';
 import '../models/play_history.dart';
@@ -372,21 +373,21 @@ class PlayerService extends ChangeNotifier {
       }
 
       final streamInfo = audioStreams.withHighestBitrate();
-      final streamUrl = streamInfo.url.toString();
-      final totalBytes = streamInfo.size.totalBytes;
-      final mimeType = streamInfo.container.name == 'webm' ? 'audio/webm' : 'audio/mp4';
-
-      debugPrint('[Player] Stream URL obtained, bitrate: ${streamInfo.bitrate}, container: ${streamInfo.container.name}');
-
+      debugPrint('[Player] Stream bitrate: ' + streamInfo.bitrate.toString());
       if (_loadId != currentLoadId) return;
 
-      // 3. Play via ExoPlayer (audio_service/just_audio)
-      await _audioHandler!.playYoutubeStream(
-        url: streamUrl,
-        totalBytes: totalBytes,
-        mimeType: mimeType,
-        item: mediaItem,
+      // 3. Download audio to temp file via youtube_explode (bypasses all HTTP issues)
+      debugPrint('[Player] Downloading audio stream...');
+      final tempPath = await YoutubeStreamDownloader.downloadToTempFile(
+        yt: _yt,
+        streamInfo: streamInfo,
+        videoId: video.videoId,
       );
+      
+      if (_loadId != currentLoadId) return;
+
+      // 4. Play the downloaded temp file via ExoPlayer
+      await _audioHandler!.playFile(tempPath, mediaItem);
       _isPlaying = true;
     } catch (e) {
       debugPrint('[Player] Load error: $e');

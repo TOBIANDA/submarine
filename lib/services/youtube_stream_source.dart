@@ -1,60 +1,42 @@
-﻿// lib/services/youtube_stream_source.dart
+// lib/services/youtube_stream_source.dart
 import 'dart:io';
-import 'package:just_audio/just_audio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-/// Custom StreamAudioSource that fetches YouTube audio with proper HTTP headers.
-/// This bypasses the 403 error that occurs when ExoPlayer tries to fetch
-/// YouTube URLs with its default User-Agent.
-class YoutubeStreamAudioSource extends StreamAudioSource {
-  final String url;
-  final int totalBytes;
-  final String mimeType;
+/// Downloads YouTube audio stream to a temporary file using
+/// youtube_explode_dart's StreamsClient (which handles all HTTP auth/throttling).
+/// Returns the file path once enough data is available for playback.
+class YoutubeStreamDownloader {
+  static Future<String> downloadToTempFile({
+    required YoutubeExplode yt,
+    required StreamInfo streamInfo,
+    required String videoId,
+  }) async {
+    final dir = await getTemporaryDirectory();
+    final ext = streamInfo.container.name == 'webm' ? 'webm' : 'm4a';
+    final filePath = '${dir.path}/yt_audio_$videoId.$ext';
+    final file = File(filePath);
 
-  YoutubeStreamAudioSource({
-    required this.url,
-    required this.totalBytes,
-    required this.mimeType,
-  });
-
-  static const _userAgent =
-      'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    final s = start ?? 0;
-
-    final client = HttpClient();
-    client.userAgent = _userAgent;
-    
-    try {
-      final request = await client.getUrl(Uri.parse(url));
-      request.headers.set('Referer', 'https://www.youtube.com/');
-      request.headers.set('Origin', 'https://www.youtube.com');
-
-      // Range request for seeking support
-      if (end != null) {
-        request.headers.set('Range', 'bytes=$s-${end - 1}');
-      } else {
-        request.headers.set('Range', 'bytes=$s-');
-      }
-
-      final response = await request.close();
-      final responseLength = end != null ? (end - s) : (totalBytes - s);
-
-      debugPrint('[YTStream] Range $s-${end ?? "end"} -> status ${response.statusCode}, len=$responseLength');
-
-      return StreamAudioResponse(
-        sourceLength: totalBytes,
-        contentLength: responseLength,
-        offset: s,
-        stream: response.cast<List<int>>(),
-        contentType: mimeType,
-      );
-    } catch (e) {
-      debugPrint('[YTStream] HTTP request failed: $e');
-      rethrow;
+    // If file already exists and is large enough, reuse it
+    if (await file.exists() && await file.length() > 100000) {
+      debugPrint('[YTDownloader] Reusing cached file: $filePath');
+      return filePath;
     }
+
+    debugPrint('[YTDownloader] Downloading stream to: $filePath');
+    final stream = yt.videos.streamsClient.get(streamInfo);
+    final sink = file.openWrite();
+    int totalBytes = 0;
+
+    await for (final chunk in stream) {
+      sink.add(chunk);
+      totalBytes += chunk.length;
+    }
+
+    await sink.flush();
+    await sink.close();
+    debugPrint('[YTDownloader] Download complete: ${totalBytes} bytes');
+    return filePath;
   }
 }

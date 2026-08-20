@@ -1,13 +1,11 @@
-﻿// lib/services/audio_handler.dart
+// lib/services/audio_handler.dart
 import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
-import 'youtube_stream_source.dart';
 
 /// BackgroundAudioHandler using ExoPlayer via audio_service.
-/// YouTube audio is streamed through YoutubeStreamAudioSource to bypass 403.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
 
@@ -65,31 +63,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
-  /// Play YouTube audio via custom StreamAudioSource (bypasses 403)
-  Future<void> playYoutubeStream({
-    required String url,
-    required int totalBytes,
-    required String mimeType,
-    required MediaItem item,
-  }) async {
-    mediaItem.add(item);
-    try {
-      await _player.stop();
-      final source = YoutubeStreamAudioSource(
-        url: url,
-        totalBytes: totalBytes,
-        mimeType: mimeType,
-      );
-      await _player.setAudioSource(source, preload: true);
-      await _player.play();
-      debugPrint('[AudioHandler] Playing YouTube stream: ${item.title}');
-    } catch (e) {
-      debugPrint('[AudioHandler] playYoutubeStream error: $e');
-      rethrow;
-    }
-  }
-
-  /// Play from a local file
+  /// Play from a local file path (works for both downloaded + temp-cached audio)
   Future<void> playFile(String path, MediaItem item) async {
     mediaItem.add(item);
     try {
@@ -99,9 +73,9 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         preload: true,
       );
       await _player.play();
-      debugPrint('[AudioHandler] Playing offline: ${item.title}');
+      debugPrint('[AudioHandler] Playing: ');
     } catch (e) {
-      debugPrint('[AudioHandler] playFile error: $e');
+      debugPrint('[AudioHandler] playFile error: ');
       rethrow;
     }
   }
