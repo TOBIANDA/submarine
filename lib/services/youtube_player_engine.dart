@@ -10,6 +10,7 @@ class YoutubePlayerEngine {
 
   InAppWebViewController? _controller;
   String? _pendingVideoId;
+  String? _currentLoadedId;
 
   // Callbacks
   Function(Duration position, Duration duration)? onProgress;
@@ -24,10 +25,12 @@ class YoutubePlayerEngine {
       handlerName: 'onPlayerReady',
       callback: (args) {
         debugPrint('[YT-Engine] YouTube HTML5 Player is READY');
-        if (_pendingVideoId != null) {
+        if (_pendingVideoId != null && _pendingVideoId != _currentLoadedId) {
           final id = _pendingVideoId!;
           _pendingVideoId = null;
           loadVideo(id);
+        } else {
+          play();
         }
       },
     );
@@ -79,7 +82,7 @@ class YoutubePlayerEngine {
 <body>
   <div id="player"></div>
   <script>
-    // Anti Background Pause & Screen Off Freeze
+    // Anti Background Pause & Visibility Spoofing
     try {
       Object.defineProperty(document, 'hidden', { value: false, writable: false });
       Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
@@ -137,9 +140,10 @@ class YoutubePlayerEngine {
   }
 
   Future<void> loadVideo(String videoId) async {
-    _pendingVideoId = videoId;
+    _currentLoadedId = videoId;
     if (_controller == null) {
       debugPrint('[YT-Engine] Controller not yet attached, pending: $videoId');
+      _pendingVideoId = videoId;
       return;
     }
 
@@ -168,6 +172,7 @@ class YoutubePlayerEngine {
 
   Future<void> stop() async {
     _pendingVideoId = null;
+    _currentLoadedId = null;
     await _controller?.evaluateJavascript(source: 'if(player && player.stopVideo) player.stopVideo();');
   }
 }
