@@ -1,14 +1,14 @@
 ﻿// lib/services/download_service.dart
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
-import 'package:flutter/foundation.dart';
 
-import '../models/video_item.dart';
 import '../models/downloaded_track.dart';
+import '../models/video_item.dart';
 import 'db_service.dart';
 
 class DownloadService {
@@ -19,7 +19,26 @@ class DownloadService {
   final YoutubeExplode _yt = YoutubeExplode();
   final Map<String, bool> _activeCancelTokens = {};
 
-  void init() {}
+  void init() {
+    _cleanCorruptedDownloads();
+  }
+
+  /// Bersihkan file 0-byte atau rusak dari storage dan database
+  Future<void> _cleanCorruptedDownloads() async {
+    try {
+      final downloads = await DbService().getAllDownloads();
+      for (final track in downloads) {
+        final file = File(track.localPath);
+        if (!file.existsSync() || file.lengthSync() < 50000) {
+          debugPrint('[Download] Menghapus track korup (0-byte): ${track.title}');
+          if (file.existsSync()) await file.delete();
+          await DbService().deleteDownload(track.videoId);
+        }
+      }
+    } catch (e) {
+      debugPrint('[Download] Error cleaning corrupted downloads: $e');
+    }
+  }
 
   Future<void> cancelActiveDownload(String videoId) async {
     _activeCancelTokens[videoId] = true;
@@ -50,7 +69,7 @@ class DownloadService {
 
   /// Ambil URL audio stream langsung dari Innertube Android API
   Future<(String, int, String)?> _getInnertubeAudioStream(String videoId) async {
-    final ua = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+    const ua = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
     final httpClient = http.Client();
     try {
       final resp = await httpClient.post(
@@ -92,13 +111,10 @@ class DownloadService {
 
           final chosen = audioStreams.first;
           final rawUrl = chosen['url'] as String;
-          final streamUrl = rawUrl.contains('?')
-              ? '$rawUrl&rn=1&rbuf=0&ratebypass=yes'
-              : '$rawUrl?rn=1&rbuf=0&ratebypass=yes';
           final clen = int.tryParse(chosen['contentLength']?.toString() ?? '0') ?? 0;
           final mime = chosen['mimeType'] as String? ?? 'audio/mp4';
           final ext = mime.contains('webm') ? 'webm' : 'm4a';
-          return (streamUrl, clen, ext);
+          return (rawUrl, clen, ext);
         }
       }
     } catch (e) {
@@ -128,7 +144,7 @@ class DownloadService {
         final (url, totalBytes, ext) = streamInfo;
         final localPath = '${downloadDir.path}/${video.videoId}.$ext';
         final file = File(localPath);
-        fileStream = file.openWrite();
+        if (file.existsSync()) file.deleteSync();
 
         final request = http.Request('GET', Uri.parse(url));
         request.headers['User-Agent'] =
@@ -137,6 +153,12 @@ class DownloadService {
         final client = http.Client();
         final response = await client.send(request);
 
+        if (response.statusCode != 200 && response.statusCode != 206) {
+          client.close();
+          throw Exception('Download stream gagal dengan kode HTTP ${response.statusCode}');
+        }
+
+        fileStream = file.openWrite();
         int downloadedBytes = 0;
         final length = totalBytes > 0 ? totalBytes : (response.contentLength ?? 0);
 
@@ -159,6 +181,12 @@ class DownloadService {
         await fileStream.close();
         client.close();
 
+        final finalSize = file.existsSync() ? file.lengthSync() : 0;
+        if (finalSize < 50000) {
+          if (file.existsSync()) await file.delete();
+          throw Exception('File unduhan tidak lengkap ($finalSize bytes)');
+        }
+
         final track = DownloadedTrack(
           videoId: video.videoId,
           title: video.title,
@@ -167,57 +195,14 @@ class DownloadService {
           durationSeconds: video.durationSeconds,
           localPath: localPath,
           downloadedAt: DateTime.now(),
-          fileSizeBytes: file.existsSync() ? file.lengthSync() : 0,
+          fileSizeBytes: finalSize,
         );
         await DbService().insertDownload(track);
         onComplete(track);
         return;
       }
 
-      // Fallback via youtube_explode_dart
-      final manifest = await _yt.videos.streamsClient.getManifest(video.videoId);
-      if (manifest.audioOnly.isEmpty) {
-        throw Exception('Tidak ada stream audio yang tersedia.');
-      }
-
-      final ytStreamInfo = manifest.audioOnly.withHighestBitrate();
-      final ext = ytStreamInfo.container.name;
-      final localPath = '${downloadDir.path}/${video.videoId}.$ext';
-      final file = File(localPath);
-      fileStream = file.openWrite();
-
-      final stream = _yt.videos.streamsClient.get(ytStreamInfo);
-      final totalBytes = ytStreamInfo.size.totalBytes;
-      int downloadedBytes = 0;
-
-      await for (final data in stream) {
-        if (_activeCancelTokens[video.videoId] == true) {
-          await fileStream.close();
-          if (await file.exists()) await file.delete();
-          onError('Unduhan dibatalkan');
-          return;
-        }
-        downloadedBytes += data.length;
-        final progress = totalBytes > 0 ? downloadedBytes / totalBytes : 0.0;
-        onProgress(progress.clamp(0.0, 1.0));
-        fileStream.add(data);
-      }
-
-      await fileStream.flush();
-      await fileStream.close();
-
-      final track = DownloadedTrack(
-        videoId: video.videoId,
-        title: video.title,
-        channelTitle: video.channelTitle,
-        thumbnailUrl: video.thumbnailUrl,
-        durationSeconds: video.durationSeconds,
-        localPath: localPath,
-        downloadedAt: DateTime.now(),
-        fileSizeBytes: file.existsSync() ? file.lengthSync() : 0,
-      );
-      await DbService().insertDownload(track);
-      onComplete(track);
+      throw Exception('Tidak dapat mengambil stream audio lagu ini');
     } catch (e) {
       await fileStream?.close();
       debugPrint('[Download] Gagal: $e');
