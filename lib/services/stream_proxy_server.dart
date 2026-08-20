@@ -37,6 +37,7 @@ class StreamProxyServer {
 
   Future<void> _handleRequest(HttpRequest req) async {
     final videoId = req.uri.queryParameters['id'];
+    debugPrint('[StreamProxy] Incoming request for video: $videoId, Range: ${req.headers.value('range')}');
     if (videoId == null || videoId.isEmpty) {
       req.response.statusCode = HttpStatus.badRequest;
       await req.response.close();
@@ -47,8 +48,10 @@ class StreamProxyServer {
       // 1. Get or resolve stream URL
       var cached = _streamCache[videoId];
       if (cached == null) {
+        debugPrint('[StreamProxy] Resolving Innertube stream for: $videoId');
         final resolved = await _resolveInnertubeStream(videoId);
         if (resolved == null) {
+          debugPrint('[StreamProxy] Failed to resolve stream for: $videoId');
           req.response.statusCode = HttpStatus.notFound;
           await req.response.close();
           return;
@@ -58,9 +61,12 @@ class StreamProxyServer {
       }
 
       final (streamUrl, mimeType) = cached;
+      debugPrint('[StreamProxy] Fetching upstream GoogleVideo: ${streamUrl.substring(0, 50)}...');
 
       // 2. Fetch from GoogleVideo with required Android YouTube headers
       final client = HttpClient();
+      client.autoUncompress = false; // Keep exact binary stream for ExoPlayer
+
       final upstreamReq = await client.getUrl(Uri.parse(streamUrl));
       upstreamReq.headers.set('User-Agent', youtubeUserAgent);
 
@@ -70,6 +76,8 @@ class StreamProxyServer {
       }
 
       final upstreamRes = await upstreamReq.close();
+      debugPrint('[StreamProxy] Upstream response status: ${upstreamRes.statusCode}');
+
       req.response.statusCode = upstreamRes.statusCode;
       req.response.headers.contentType = ContentType.parse(mimeType);
 
@@ -87,6 +95,7 @@ class StreamProxyServer {
 
       // Pipe data from GoogleVideo -> Local Proxy -> ExoPlayer
       await upstreamRes.pipe(req.response);
+      debugPrint('[StreamProxy] Finished piping stream for: $videoId');
     } catch (e) {
       debugPrint('[StreamProxy] Request error for $videoId: $e');
       try {
@@ -138,11 +147,8 @@ class StreamProxyServer {
 
           final chosen = audioStreams.first;
           final rawUrl = chosen['url'] as String;
-          final streamUrl = rawUrl.contains('?')
-              ? '$rawUrl&rn=1&rbuf=0&ratebypass=yes'
-              : '$rawUrl?rn=1&rbuf=0&ratebypass=yes';
           final mime = chosen['mimeType'] as String? ?? 'audio/mp4';
-          return (streamUrl, mime);
+          return (rawUrl, mime);
         }
       }
     } catch (e) {
