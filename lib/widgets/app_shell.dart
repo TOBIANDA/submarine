@@ -27,8 +27,6 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // When the app is paused/hidden (user switches apps or turns screen off),
-    // immediately re-trigger YouTube audio play to prevent Android WebView from pausing.
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
       final player = ref.read(playerServiceProvider);
       if (player.isPlaying) {
@@ -54,15 +52,17 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Player Widget (keeps webview active & playing audio)
-          Offstage(
-            offstage: true,
-            child: SizedBox(
-              width: 100,
-              height: 100,
-              child: YoutubePlayer(
-                controller: player.youtubeController,
-                showVideoProgressIndicator: false,
+          // Background YouTube Player Widget (keeps webview active & playing audio with valid GPU surface)
+          IgnorePointer(
+            child: Opacity(
+              opacity: 0.01,
+              child: SizedBox(
+                width: 100,
+                height: 100,
+                child: YoutubePlayer(
+                  controller: player.youtubeController,
+                  showVideoProgressIndicator: false,
+                ),
               ),
             ),
           ),
