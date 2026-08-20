@@ -1,10 +1,9 @@
 ﻿// lib/services/ai_service.dart
 import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
-
-import '../models/video_item.dart';
+import 'package:http/http.dart' as http;
 import '../core/app_constants.dart';
+import '../models/video_item.dart';
 
 class AiCurationResult {
   final String message;
@@ -16,9 +15,7 @@ class AiCurationResult {
 
 class AiEditResult {
   final String message;
-  /// Indeks dari playlist asli yang harus DIPERTAHANKAN
   final List<int> keepIndices;
-  /// Query pencarian untuk lagu-lagu BARU yang akan ditambahkan
   final List<String> newSongQueries;
   final List<String> newSongReasons;
 
@@ -44,9 +41,9 @@ class AiService {
     final response = await _callGroq(
       system: AppConstants.curateSystemPrompt,
       userMessage: userMessage,
+      maxTokens: (count * 35 + 400).clamp(600, 2200),
     );
 
-    // Strip markdown fences if the model wrapped the JSON
     final cleaned = _stripMarkdown(response);
 
     try {
@@ -69,13 +66,12 @@ class AiService {
   }
 
   /// Ask Groq to reorder a playlist based on user instruction
-  /// Returns new ordering as list of original indices
   Future<List<int>> reorderPlaylist(
       List<VideoItem> items, String instruction) async {
     final itemList = items
         .asMap()
         .entries
-        .map((e) => '${e.key}: ${e.value.title} — ${e.value.channelTitle}')
+        .map((e) => '${e.key}: ${e.value.title} - ${e.value.channelTitle}')
         .join('\n');
 
     final userMessage = '''
@@ -88,6 +84,7 @@ Instruction: $instruction
     final response = await _callGroq(
       system: AppConstants.reorderSystemPrompt,
       userMessage: userMessage,
+      maxTokens: 1000,
     );
 
     final cleaned = _stripMarkdown(response);
@@ -102,13 +99,12 @@ Instruction: $instruction
   }
 
   /// Meminta AI untuk mengedit playlist berdasarkan instruksi user.
-  /// AI akan memutuskan lagu mana yang dihapus dan lagu baru apa yang ditambahkan.
   Future<AiEditResult> editPlaylist(
       List<VideoItem> items, String instruction) async {
     final itemList = items
         .asMap()
         .entries
-        .map((e) => '${e.key}: ${e.value.title} — ${e.value.channelTitle}')
+        .map((e) => '${e.key}: ${e.value.title} - ${e.value.channelTitle}')
         .join('\n');
 
     final userMessage = '''
@@ -121,6 +117,7 @@ Instruction: $instruction
     final response = await _callGroq(
       system: AppConstants.editSystemPrompt,
       userMessage: userMessage,
+      maxTokens: 1500,
     );
 
     final cleaned = _stripMarkdown(response);
@@ -154,31 +151,32 @@ Instruction: $instruction
     }
   }
 
-  /// Meminta Groq untuk menyarankan satu lagu berikutnya (Fallback jika YouTube gagal)
-    /// Meminta Groq untuk menyarankan satu lagu berikutnya yang BERBEDA (Anti-Duplikat)
+  /// Meminta Groq untuk menyarankan satu lagu berikutnya yang BERBEDA (Anti-Duplikat)
   Future<String?> recommendNextSong(String currentTitle, String currentArtist) async {
     final cleanTitle = currentTitle
         .replaceAll(RegExp(r'\(.*?\)|\[.*?\]', caseSensitive: false), '')
         .replaceAll(RegExp(r'official\s*(video|audio|lyrics|music video)?', caseSensitive: false), '')
         .trim();
 
-    final system = '''You are an expert music curator and recommendation engine for a high-end music app. 
+    final system = '''You are an expert music curator. 
 The user just finished listening to "$cleanTitle" by "$currentArtist". 
 
 YOUR TASK:
-Recommend EXACTLY ONE SIMILAR song (by the same artist or by a closely related artist/genre) that provides a great continuous listening experience.
+Recommend EXACTLY ONE SIMILAR song (by the same artist or by a related artist) that provides a great continuous listening experience.
 
-CRITICAL DEDUPLICATION RULES:
-1. STRICTLY FORBIDDEN to recommend "$cleanTitle" or any remix, cover, acoustic, or re-upload of "$cleanTitle".
-2. It MUST be a COMPLETELY DIFFERENT song (e.g. if the user played "18" by One Direction, recommend "Night Changes" by One Direction, or "Sign of the Times" by Harry Styles, or "Lie to Me" by 5 Seconds of Summer).
-3. Do NOT recommend albums, compilations, mixes, or podcasts.
-4. Output ONLY the search query for the song, e.g. "Artist - Song Title official audio". Do not include any other text, quotes, or markdown.''';
+CRITICAL RULES:
+1. STRICTLY FORBIDDEN to recommend "$cleanTitle" or any remix of it.
+2. It MUST be a COMPLETELY DIFFERENT song.
+3. Output ONLY the search query, e.g. "Artist - Song Title official audio". Do not include quotes or markdown.''';
 
     try {
-      final response = await _callGroq(system: system, userMessage: 'Recommend next distinct song');
+      final response = await _callGroq(
+        system: system,
+        userMessage: 'Recommend next distinct song',
+        maxTokens: 300,
+      );
       final result = response.trim().replaceAll('"', '').replaceAll("'", "");
       
-      // Safety check: if model repeated the same title, ignore
       if (result.toLowerCase().contains(cleanTitle.toLowerCase()) && cleanTitle.length > 3) {
         debugPrint('[AI] Model menyarankan lagu yang sama ($result), abaikan untuk cegah duplikat.');
         return null;
@@ -190,54 +188,65 @@ CRITICAL DEDUPLICATION RULES:
     }
   }
 
-  /// Call Groq using OpenAI-compatible Chat Completions API
+  /// Call Groq using OpenAI-compatible Chat Completions API with fallback models
   Future<String> _callGroq({
     required String system,
     required String userMessage,
+    int maxTokens = 1500,
   }) async {
     final uri = Uri.parse('${AppConstants.groqBaseUrl}/chat/completions');
-
-    // Gunakan salah satu API key secara acak untuk mencegah rate limit,
-    // atau gunakan key pertama jika hanya ada 1.
     final keys = AppConstants.groqApiKeys.where((k) => !k.contains('ISI_API_CADANGAN')).toList();
     final apiKey = keys.isNotEmpty ? (keys.toList()..shuffle()).first : AppConstants.groqApiKeys.first;
 
-    final response = await http.post(
-      uri,
-      headers: {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'model': AppConstants.groqModel,
-        'temperature': 0.7,
-        'max_tokens': 8000,
-        'messages': [
-          {'role': 'system', 'content': system},
-          {'role': 'user', 'content': userMessage},
-        ],
-      }),
-    );
+    final modelsToTry = [AppConstants.groqModel, ...AppConstants.fallbackGroqModels].toSet().toList();
+    Object? lastError;
 
-    if (response.statusCode != 200) {
-      throw Exception(
-          'Groq API error ${response.statusCode}: ${response.body}');
+    for (final model in modelsToTry) {
+      try {
+        final response = await http.post(
+          uri,
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'model': model,
+            'temperature': 0.6,
+            'max_tokens': maxTokens,
+            'messages': [
+              {'role': 'system', 'content': system},
+              {'role': 'user', 'content': userMessage},
+            ],
+          }),
+        ).timeout(const Duration(seconds: 25));
+
+        if (response.statusCode == 200) {
+          final jsonBody = jsonDecode(response.body) as Map<String, dynamic>;
+          final content = jsonBody['choices'][0]['message']['content'] as String;
+          return content;
+        } else {
+          lastError = 'Groq API error ${response.statusCode}: ${response.body}';
+          debugPrint('[AI] Model $model returned ${response.statusCode}, trying next model...');
+        }
+      } catch (e) {
+        lastError = e;
+        debugPrint('[AI] Model $model exception: $e, trying next model...');
+      }
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final choices = data['choices'] as List<dynamic>;
-    final message = choices.first as Map<String, dynamic>;
-    return (message['message'] as Map<String, dynamic>)['content'] as String;
+    throw Exception(lastError ?? 'All Groq models failed');
   }
 
-  /// Strip ```json ... ``` markdown fences that LLMs sometimes add
   String _stripMarkdown(String raw) {
-    final trimmed = raw.trim();
-    // Remove ```json or ``` at start and ``` at end
-    final stripped = trimmed
-        .replaceFirst(RegExp(r'^```(?:json)?\s*', multiLine: false), '')
-        .replaceFirst(RegExp(r'\s*```$', multiLine: false), '');
-    return stripped.trim();
+    var text = raw.trim();
+    if (text.startsWith('```json')) {
+      text = text.substring(7);
+    } else if (text.startsWith('```')) {
+      text = text.substring(3);
+    }
+    if (text.endsWith('```')) {
+      text = text.substring(0, text.length - 3);
+    }
+    return text.trim();
   }
 }
-

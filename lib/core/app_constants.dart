@@ -40,8 +40,8 @@ class AppConstants {
   // ─────────────────────────────────────────────
   static const String youtubeBaseUrl = 'https://www.googleapis.com/youtube/v3';
   static const String groqBaseUrl = 'https://api.groq.com/openai/v1';
-  static const String groqModel = 'llama-3.3-70b-versatile';
-  static const List<String> fallbackGroqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'];
+  static const String groqModel = 'openai/gpt-oss-120b';
+  static const List<String> fallbackGroqModels = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'];
 
   // ─────────────────────────────────────────────
   // YouTube Data API quotas
@@ -126,6 +126,7 @@ If no songs need to be removed, set "keep_indices" to all original indices.
 If no new songs need to be added, set "new_songs" to an empty array [].
 ''';
 }
+
 
 
 
