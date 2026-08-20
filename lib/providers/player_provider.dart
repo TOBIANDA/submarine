@@ -1,4 +1,4 @@
-// lib/providers/player_provider.dart
+﻿// lib/providers/player_provider.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/player_service.dart';
 import '../services/audio_handler.dart';
@@ -32,9 +32,6 @@ final isPlayingProvider = Provider<bool>((ref) {
   return ref.watch(playerServiceProvider).isPlaying;
 });
 
-final audioFocusModeProvider = Provider<bool>((ref) {
-  return ref.watch(playerServiceProvider).audioFocusMode;
-});
 
 final repeatModeProvider = Provider<RepeatMode>((ref) {
   return ref.watch(playerServiceProvider).repeatMode;
@@ -51,3 +48,4 @@ final queueProvider = Provider<List<VideoItem>>((ref) {
 final isLoadingAudioProvider = Provider<bool>((ref) {
   return ref.watch(playerServiceProvider).isLoadingAudio;
 });
+

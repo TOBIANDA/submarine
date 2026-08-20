@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
@@ -18,28 +17,9 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
-      final player = ref.read(playerServiceProvider);
-      if (player.isPlaying) {
-        Future.delayed(const Duration(milliseconds: 150), () {
-          player.youtubeController.play();
-        });
-      }
-    }
-  }
-
+class _AppShellState extends ConsumerState<AppShell> {
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -52,22 +32,7 @@ class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Player Widget (keeps webview active & playing audio with valid GPU surface)
-          IgnorePointer(
-            child: Opacity(
-              opacity: 0.01,
-              child: SizedBox(
-                width: 100,
-                height: 100,
-                child: YoutubePlayer(
-                  controller: player.youtubeController,
-                  showVideoProgressIndicator: false,
-                ),
-              ),
-            ),
-          ),
-
-          widget.navigationShell,
+              widget.navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
           if (currentVideo != null)
@@ -320,3 +285,5 @@ class _BottomNavBar extends StatelessWidget {
     );
   }
 }
+
+

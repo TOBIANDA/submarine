@@ -1,4 +1,4 @@
-name: tobitube
+﻿name: tobitube
 description: Aplikasi streaming musik video YouTube bergaya Spotify dengan kurasi playlist AI.
 publish_to: 'none'
 version: 1.0.0+1
@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
 
   # Background audio
+  audio_session: ^0.1.21
   just_audio: ^0.9.40
   youtube_explode_dart: ^3.1.0
 
@@ -96,3 +97,4 @@ flutter:
   assets:
     - assets/images/
     - assets/animations/
+
