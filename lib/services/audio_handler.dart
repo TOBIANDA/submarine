@@ -35,7 +35,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
-    // Start local loopback audio proxy to bypass ExoPlayer 403
+    // Start fast local loopback audio proxy
     await _startProxyServer();
 
     _player.playerStateStream.listen((state) {
@@ -88,14 +88,15 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   Future<void> _startProxyServer() async {
+    if (_proxyServer != null) return;
     try {
       _proxyServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _proxyPort = _proxyServer!.port;
-      debugPrint('[AudioHandler] Local loopback audio proxy started on port $_proxyPort');
+      debugPrint('[AudioHandler] Fast local audio proxy listening on port $_proxyPort');
 
       _proxyServer!.listen((HttpRequest request) async {
-        final videoId = request.uri.queryParameters['id'];
-        if (videoId == null || videoId.isEmpty) {
+        final targetUrl = request.uri.queryParameters['url'];
+        if (targetUrl == null || targetUrl.isEmpty) {
           request.response.statusCode = HttpStatus.badRequest;
           await request.response.close();
           return;
@@ -103,14 +104,8 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
 
         http.Client? upstreamClient;
         try {
-          final manifest = await _yt.videos.streamsClient.getManifest(videoId);
-          final audioStream = manifest.audioOnly.firstWhere(
-            (s) => s.tag == 140,
-            orElse: () => manifest.audioOnly.withHighestBitrate(),
-          );
-
           upstreamClient = http.Client();
-          final req = http.Request('GET', audioStream.url);
+          final req = http.Request('GET', Uri.parse(targetUrl));
           req.headers['User-Agent'] = _ua;
           
           final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
@@ -138,7 +133,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
           await request.response.addStream(upstream.stream);
           await request.response.close();
         } catch (e) {
-          debugPrint('[AudioProxy] Stream proxy error: $e');
           try {
             request.response.statusCode = HttpStatus.internalServerError;
             await request.response.close();
@@ -148,7 +142,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         }
       });
     } catch (e) {
-      debugPrint('[AudioHandler] Failed to bind local proxy: $e');
+      debugPrint('[AudioHandler] Proxy server bind error: $e');
     }
   }
 
@@ -179,7 +173,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
-  /// Play online song natively with ExoPlayer via local loopback proxy
+  /// Play online song natively with ExoPlayer via pre-resolved fast loopback proxy
   Future<void> playOnline(String videoId, MediaItem item) async {
     mediaItem.add(item);
     try {
@@ -188,8 +182,16 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         await _startProxyServer();
       }
 
-      final proxyUri = Uri.parse('http://127.0.0.1:$_proxyPort/stream?id=$videoId');
-      debugPrint('[AudioHandler] Playing through local loopback proxy: $proxyUri');
+      debugPrint('[AudioHandler] Resolving YouTube stream for $videoId...');
+      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
+      final audioStream = manifest.audioOnly.firstWhere(
+        (s) => s.tag == 140,
+        orElse: () => manifest.audioOnly.withHighestBitrate(),
+      );
+      final rawStreamUrl = audioStream.url.toString();
+
+      final proxyUri = Uri.parse('http://127.0.0.1:$_proxyPort/stream?url=${Uri.encodeComponent(rawStreamUrl)}');
+      debugPrint('[AudioHandler] Starting ExoPlayer on pre-resolved proxy stream: $proxyUri');
       
       await _player.setAudioSource(
         AudioSource.uri(proxyUri),
