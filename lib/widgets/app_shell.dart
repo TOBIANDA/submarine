@@ -191,7 +191,7 @@ class _MusicMiniPlayer extends StatelessWidget {
                   ),
 
                   // Play / Pause Button
-                  if (player.isLoadingAudio)
+                  if (player.isLoadingAudio && !player.isPlaying)
                     const SizedBox(
                       width: 32,
                       height: 32,

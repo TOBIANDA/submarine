@@ -313,7 +313,7 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
                           ],
                         ),
                         child: Center(
-                          child: player.isLoadingAudio
+                          child: (player.isLoadingAudio && !player.isPlaying)
                               ? const SizedBox(
                                   width: 28,
                                   height: 28,

@@ -55,7 +55,7 @@ class PlayerService extends ChangeNotifier {
   Future<void> init(BackgroundAudioHandler handler) async {
     _audioHandler = handler;
 
-    audioPlayer.playerStateStream.listen((state) {
+    audioPlayer.playerStateStream.listen((state) { if (state.playing) { _isLoadingAudio = false; }
       notifyListeners();
     });
 
