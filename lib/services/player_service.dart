@@ -95,11 +95,9 @@ class PlayerService extends ChangeNotifier {
     final playing = value.isPlaying;
     if (_isPlaying != playing) {
       _isPlaying = playing;
-      if (playing) {
-        final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
-        if (item != null) _audioHandler?.startBackgroundKeepAlive(item);
-      } else {
-        _audioHandler?.pauseBackgroundKeepAlive();
+      final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
+      if (item != null) {
+        _audioHandler?.updateNotification(item, isPlaying: playing);
       }
       notifyListeners();
     }
@@ -311,13 +309,14 @@ class PlayerService extends ChangeNotifier {
     } else {
       if (_isPlaying) {
         youtubeController.pause();
-        _audioHandler?.pauseBackgroundKeepAlive();
         _isPlaying = false;
       } else {
         youtubeController.play();
-        final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
-        if (item != null) _audioHandler?.startBackgroundKeepAlive(item);
         _isPlaying = true;
+      }
+      final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
+      if (item != null) {
+        _audioHandler?.updateNotification(item, isPlaying: _isPlaying);
       }
       notifyListeners();
     }
@@ -466,8 +465,8 @@ class PlayerService extends ChangeNotifier {
 
         final mediaItem = _buildMediaItem(video);
         
-        // Start Android Foreground Service keep-alive so background playback NEVER stops
-        await _audioHandler!.startBackgroundKeepAlive(mediaItem);
+        // Update notification & mediaSession
+        await _audioHandler!.updateNotification(mediaItem, isPlaying: true);
 
         debugPrint('[Player] 🚀 Loading YouTube Video via Official Player: ${video.title} (${video.videoId})');
         youtubeController.load(video.videoId);
