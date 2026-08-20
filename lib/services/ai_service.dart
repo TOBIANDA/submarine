@@ -41,7 +41,7 @@ class AiService {
     final response = await _callGroq(
       system: AppConstants.curateSystemPrompt,
       userMessage: userMessage,
-      maxTokens: (count * 35 + 400).clamp(600, 2200),
+      maxTokens: (count * 55 + 600).clamp(1200, 3600),
     );
 
     final cleaned = _stripMarkdown(response);
@@ -49,20 +49,40 @@ class AiService {
     try {
       final jsonMap = jsonDecode(cleaned) as Map<String, dynamic>;
       final message = jsonMap['message'] as String? ?? 'Berikut playlist pilihan saya:';
-      final jsonList = jsonMap['results'] as List<dynamic>;
+      final jsonList = jsonMap['results'] as List<dynamic>? ?? [];
       
       final queries = <String>[];
       final reasons = <String>[];
       for (final item in jsonList) {
-        final map = item as Map<String, dynamic>;
-        queries.add(map['query'] as String);
-        reasons.add(map['reason'] as String? ?? '');
+        if (item is Map) {
+          final q = (item['query'] as String?)?.trim() ?? '';
+          if (q.isNotEmpty) {
+            queries.add(q);
+            reasons.add((item['reason'] as String?) ?? '');
+          }
+        }
       }
-      return AiCurationResult(message: message, queries: queries, reasons: reasons);
+
+      if (queries.isNotEmpty) {
+        return AiCurationResult(message: message, queries: queries, reasons: reasons);
+      }
     } catch (e) {
-      throw Exception(
-          'Failed to parse AI curation response: $e\n\nRaw: $response');
+      debugPrint('[AI] Standard JSON decode error, falling back to resilient regex recovery: $e');
     }
+
+    // Resilient Regex recovery if JSON had slight formatting imperfection
+    final regexMatches = RegExp(r'["\x27]query["\x27]\s*:\s*["\x27]([^"\x27]+)["\x27]').allMatches(cleaned);
+    final fallbackQueries = regexMatches.map((m) => m.group(1)!.trim()).where((q) => q.isNotEmpty).toList();
+
+    if (fallbackQueries.isNotEmpty) {
+      return AiCurationResult(
+        message: 'Berikut lagu-lagu pilihan Anda:',
+        queries: fallbackQueries,
+        reasons: List.filled(fallbackQueries.length, ''),
+      );
+    }
+
+    throw Exception('Gagal memproses daftar lagu dari AI. Silakan coba lagi.');
   }
 
   /// Ask Groq to reorder a playlist based on user instruction
@@ -93,8 +113,10 @@ Instruction: $instruction
       final jsonList = jsonDecode(cleaned) as List<dynamic>;
       return jsonList.map((e) => e as int).toList();
     } catch (e) {
-      throw Exception(
-          'Failed to parse AI reorder response: $e\n\nRaw: $response');
+      final matches = RegExp(r'\d+').allMatches(cleaned);
+      final list = matches.map((m) => int.parse(m.group(0)!)).toList();
+      if (list.length == items.length) return list;
+      throw Exception('Failed to parse AI reorder response: $e');
     }
   }
 
@@ -126,17 +148,22 @@ Instruction: $instruction
       final jsonMap = jsonDecode(cleaned) as Map<String, dynamic>;
       final message = jsonMap['message'] as String? ?? 'Playlist telah diperbarui!';
       
-      final keepIndices = (jsonMap['keep_indices'] as List<dynamic>)
-          .map((e) => e as int)
-          .toList();
+      final keepIndices = (jsonMap['keep_indices'] as List<dynamic>?)
+              ?.map((e) => e as int)
+              .toList() ??
+          List.generate(items.length, (i) => i);
       
       final newSongsRaw = jsonMap['new_songs'] as List<dynamic>? ?? [];
       final newSongQueries = <String>[];
       final newSongReasons = <String>[];
       for (final item in newSongsRaw) {
-        final map = item as Map<String, dynamic>;
-        newSongQueries.add(map['query'] as String);
-        newSongReasons.add(map['reason'] as String? ?? '');
+        if (item is Map) {
+          final q = (item['query'] as String?)?.trim() ?? '';
+          if (q.isNotEmpty) {
+            newSongQueries.add(q);
+            newSongReasons.add((item['reason'] as String?) ?? '');
+          }
+        }
       }
 
       return AiEditResult(
@@ -146,8 +173,7 @@ Instruction: $instruction
         newSongReasons: newSongReasons,
       );
     } catch (e) {
-      throw Exception(
-          'Failed to parse AI edit response: $e\n\nRaw: $response');
+      throw Exception('Failed to parse AI edit response: $e');
     }
   }
 
@@ -211,14 +237,14 @@ CRITICAL RULES:
           },
           body: jsonEncode({
             'model': model,
-            'temperature': 0.6,
+            'temperature': 0.3,
             'max_tokens': maxTokens,
             'messages': [
               {'role': 'system', 'content': system},
               {'role': 'user', 'content': userMessage},
             ],
           }),
-        ).timeout(const Duration(seconds: 25));
+        ).timeout(const Duration(seconds: 30));
 
         if (response.statusCode == 200) {
           final jsonBody = jsonDecode(response.body) as Map<String, dynamic>;
