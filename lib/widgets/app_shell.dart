@@ -8,6 +8,7 @@ import '../providers/player_provider.dart';
 import '../services/player_service.dart';
 import '../services/permission_service.dart';
 import '../theme/app_theme.dart';
+import 'youtube_background_player.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
@@ -22,8 +23,10 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      PermissionService.requestBatteryAndNotificationPermissions(context);
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) {
+        PermissionService.requestBatteryAndNotificationPermissions(context);
+      }
     });
   }
 
@@ -36,6 +39,20 @@ class _AppShellState extends ConsumerState<AppShell> {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
+          // Background YouTube Audio Engine (Immune to 403 & continuous playback)
+          Positioned(
+            left: 0,
+            top: 0,
+            width: 10,
+            height: 10,
+            child: Opacity(
+              opacity: 0.01,
+              child: YoutubeBackgroundPlayer(
+                controller: player.youtubeController,
+              ),
+            ),
+          ),
+
           widget.navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)

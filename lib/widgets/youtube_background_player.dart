@@ -3,12 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
-/// YoutubeBackgroundPlayer - A resilient YouTube player that stays alive
-/// in the background by using Virtual Display (useHybridComposition: false)
-/// and JS visibility spoofing.
 class YoutubeBackgroundPlayer extends StatefulWidget {
   final YoutubePlayerController controller;
-  final void Function(YoutubeMetaData metaData)? onEnded;
+  final ValueChanged<YoutubeMetaData>? onEnded;
 
   const YoutubeBackgroundPlayer({
     super.key,
@@ -21,39 +18,50 @@ class YoutubeBackgroundPlayer extends StatefulWidget {
 }
 
 class _YoutubeBackgroundPlayerState extends State<YoutubeBackgroundPlayer> {
-  bool _isReady = false;
-
   YoutubePlayerController get controller => widget.controller;
+  bool _isReady = false;
 
   static const String _html = '''<!DOCTYPE html>
 <html>
 <head>
-    <style>html,body{margin:0;padding:0;background-color:#000;overflow:hidden;position:fixed;height:100%;width:100%;pointer-events:none;}</style>
-    <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-    <script>
-        try {
-            Object.defineProperty(document, "hidden", { get: () => false, configurable: true });
-            Object.defineProperty(document, "visibilityState", { get: () => "visible", configurable: true });
-            Object.defineProperty(document, "webkitHidden", { get: () => false, configurable: true });
-            Object.defineProperty(document, "webkitVisibilityState", { get: () => "visible", configurable: true });
-            document.addEventListener("visibilitychange", (e) => e.stopImmediatePropagation(), true);
-            document.addEventListener("webkitvisibilitychange", (e) => e.stopImmediatePropagation(), true);
-        } catch(e) {}
-    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            overflow: hidden;
+        }
+        #player {
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+    </style>
 </head>
 <body>
     <div id="player"></div>
     <script>
-        var tag = document.createElement("script");
+        // Anti Background Pause & Screen Off Freeze
+        try {
+            Object.defineProperty(document, 'hidden', { value: false, writable: false });
+            Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
+            document.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+            window.addEventListener('blur', function(e) { e.stopImmediatePropagation(); }, true);
+            window.addEventListener('pagehide', function(e) { e.stopImmediatePropagation(); }, true);
+        } catch(e) {}
+
+        var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
-        var firstScriptTag = document.getElementsByTagName("script")[0];
+        var firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-        
+
         var player;
         var timerId;
-        
         function onYouTubeIframeAPIReady() {
-            player = new YT.Player("player", {
+            player = new YT.Player('player', {
                 height: "100%",
                 width: "100%",
                 playerVars: {
@@ -145,7 +153,7 @@ class _YoutubeBackgroundPlayerState extends State<YoutubeBackgroundPlayer> {
           allowsAirPlayForMediaPlayback: true,
           allowsPictureInPictureMediaPlayback: true,
           useWideViewPort: false,
-          useHybridComposition: false, // VIRTUAL DISPLAY: Immune to surface destruction on minimize!
+          useHybridComposition: false,
         ),
         onWebViewCreated: (webController) {
           controller.updateValue(
