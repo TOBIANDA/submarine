@@ -7,43 +7,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
-
-/// InnertubeAudioSource - in-memory streaming audio source for ExoPlayer
-class InnertubeAudioSource extends StreamAudioSource {
-  final String streamUrl;
-  final int? contentLength;
-  final String userAgent;
-
-  InnertubeAudioSource({
-    required this.streamUrl,
-    required this.contentLength,
-    required this.userAgent,
-  });
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    start ??= 0;
-    end ??= (contentLength != null && contentLength! > 0 ? contentLength : null);
-
-    final client = http.Client();
-    final req = http.Request('GET', Uri.parse(streamUrl));
-    req.headers['User-Agent'] = userAgent;
-    if (start > 0 || end != null) {
-      req.headers['Range'] = 'bytes=$start-${end != null ? end - 1 : ""}';
-    }
-
-    final streamed = await client.send(req);
-
-    return StreamAudioResponse(
-      rangeRequestsSupported: true,
-      sourceLength: (contentLength != null && contentLength! > 0) ? contentLength : streamed.contentLength,
-      contentLength: streamed.contentLength,
-      offset: start,
-      stream: streamed.stream,
-      contentType: 'audio/mp4',
-    );
-  }
-}
+import 'package:path_provider/path_provider.dart';
 
 /// BackgroundAudioHandler - provides native ExoPlayer foreground audio playback & system notification controls.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
@@ -58,6 +22,9 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   );
 
   static const String _innertubeUa = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
+  http.Client? _activeStreamClient;
+  IOSink? _activeFileSink;
+  int _streamSessionId = 0;
 
   BackgroundAudioHandler() {
     _init();
@@ -119,8 +86,8 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
-  /// Resolve Innertube Android direct stream URL & content length
-  Future<(String, int)?> _resolveInnertubeStream(String videoId) async {
+  /// Resolve Innertube Android direct stream URL
+  Future<String?> _resolveInnertubeStreamUrl(String videoId) async {
     final httpClient = http.Client();
     try {
       final resp = await httpClient.post(
@@ -160,10 +127,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
             return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
           });
 
-          final chosen = audioStreams.first;
-          final url = chosen['url'] as String;
-          final clen = int.tryParse(chosen['contentLength']?.toString() ?? '0') ?? 0;
-          return (url, clen);
+          return audioStreams.first['url'] as String;
         }
       }
     } catch (e) {
@@ -174,27 +138,98 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     return null;
   }
 
-  /// Play online song natively with ExoPlayer StreamAudioSource
+  /// Play online song natively with ExoPlayer background stream cache
   Future<void> playOnline(String videoId, MediaItem item) async {
     mediaItem.add(item);
+    _streamSessionId++;
+    final currentSession = _streamSessionId;
+
     try {
+      _activeStreamClient?.close();
+      await _activeFileSink?.close();
       await _player.stop();
-      final streamInfo = await _resolveInnertubeStream(videoId);
-      if (streamInfo == null) {
-        throw Exception('Stream URL resolution failed');
+
+      final streamUrl = await _resolveInnertubeStreamUrl(videoId);
+      if (streamUrl == null) throw Exception('Gagal mendapatkan stream URL');
+
+      final tempDir = await getTemporaryDirectory();
+      final cacheFile = File('${tempDir.path}/stream_$videoId.m4a');
+
+      // Jika file cache utuh sudah ada (>500KB), langsung putar instan!
+      if (cacheFile.existsSync() && cacheFile.lengthSync() > 500000) {
+        debugPrint('[AudioHandler] Playing existing cached stream: ${item.title}');
+        await _player.setAudioSource(AudioSource.uri(Uri.file(cacheFile.path)));
+        await _player.play();
+        return;
       }
 
-      final (url, clen) = streamInfo;
-      debugPrint('[AudioHandler] Streaming native ExoPlayer via StreamAudioSource: ${item.title}');
-      await _player.setAudioSource(
-        InnertubeAudioSource(
-          streamUrl: url,
-          contentLength: clen,
-          userAgent: _innertubeUa,
-        ),
-        preload: true,
+      if (cacheFile.existsSync()) cacheFile.deleteSync();
+
+      final client = http.Client();
+      _activeStreamClient = client;
+      final req = http.Request('GET', Uri.parse(streamUrl));
+      req.headers['User-Agent'] = _innertubeUa;
+
+      final streamed = await client.send(req);
+      if (streamed.statusCode != 200 && streamed.statusCode != 206) {
+        client.close();
+        throw Exception('Stream request error: HTTP ${streamed.statusCode}');
+      }
+
+      final sink = cacheFile.openWrite();
+      _activeFileSink = sink;
+
+      final completer = Completer<void>();
+      int bufferedBytes = 0;
+      bool playbackStarted = false;
+
+      // Stream chunks into local cache file and trigger ExoPlayer as soon as 100KB buffered
+      streamed.stream.listen(
+        (chunk) async {
+          if (_streamSessionId != currentSession) return;
+          sink.add(chunk);
+          bufferedBytes += chunk.length;
+
+          if (!playbackStarted && bufferedBytes >= 100000) {
+            playbackStarted = true;
+            await sink.flush();
+            try {
+              if (_streamSessionId != currentSession) return;
+              debugPrint('[AudioHandler] Pre-buffered $bufferedBytes bytes -> Starting ExoPlayer!');
+              await _player.setAudioSource(
+                AudioSource.uri(Uri.file(cacheFile.path)),
+                preload: true,
+              );
+              await _player.play();
+              if (!completer.isCompleted) completer.complete();
+            } catch (e) {
+              debugPrint('[AudioHandler] Pre-buffered player error: $e');
+              if (!completer.isCompleted) completer.completeError(e);
+            }
+          }
+        },
+        onDone: () async {
+          await sink.flush();
+          await sink.close();
+          client.close();
+          if (!playbackStarted && _streamSessionId == currentSession) {
+            try {
+              await _player.setAudioSource(AudioSource.uri(Uri.file(cacheFile.path)));
+              await _player.play();
+              if (!completer.isCompleted) completer.complete();
+            } catch (e) {
+              if (!completer.isCompleted) completer.completeError(e);
+            }
+          }
+        },
+        onError: (err) {
+          if (!completer.isCompleted) completer.completeError(err);
+        },
+        cancelOnError: true,
       );
-      await _player.play();
+
+      // Wait up to 10 seconds for initial 100KB buffer to start playback
+      await completer.future.timeout(const Duration(seconds: 10));
     } catch (e) {
       debugPrint('[AudioHandler] playOnline error: $e');
       rethrow;
@@ -205,6 +240,8 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> playFile(String path, MediaItem item) async {
     mediaItem.add(item);
     try {
+      _activeStreamClient?.close();
+      await _activeFileSink?.close();
       await _player.stop();
       await _player.setAudioSource(
         AudioSource.uri(Uri.file(path)),
@@ -238,6 +275,9 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> stop() async {
+    _streamSessionId++;
+    _activeStreamClient?.close();
+    await _activeFileSink?.close();
     await _player.stop();
     playbackState.add(playbackState.value.copyWith(
       processingState: AudioProcessingState.idle,
@@ -255,6 +295,9 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> customAction(String name, [Map<String, dynamic>? extras]) async {
     if (name == 'dispose') {
+      _streamSessionId++;
+      _activeStreamClient?.close();
+      await _activeFileSink?.close();
       await _player.dispose();
       await super.stop();
     }
