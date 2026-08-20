@@ -8,21 +8,56 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 
+/// InnertubeAudioSource - in-memory streaming audio source for ExoPlayer
+class InnertubeAudioSource extends StreamAudioSource {
+  final String streamUrl;
+  final int? contentLength;
+  final String userAgent;
+
+  InnertubeAudioSource({
+    required this.streamUrl,
+    required this.contentLength,
+    required this.userAgent,
+  });
+
+  @override
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    start ??= 0;
+    end ??= (contentLength != null && contentLength! > 0 ? contentLength : null);
+
+    final client = http.Client();
+    final req = http.Request('GET', Uri.parse(streamUrl));
+    req.headers['User-Agent'] = userAgent;
+    if (start > 0 || end != null) {
+      req.headers['Range'] = 'bytes=$start-${end != null ? end - 1 : ""}';
+    }
+
+    final streamed = await client.send(req);
+
+    return StreamAudioResponse(
+      rangeRequestsSupported: true,
+      sourceLength: (contentLength != null && contentLength! > 0) ? contentLength : streamed.contentLength,
+      contentLength: streamed.contentLength,
+      offset: start,
+      stream: streamed.stream,
+      contentType: 'audio/mp4',
+    );
+  }
+}
+
 /// BackgroundAudioHandler - provides native ExoPlayer foreground audio playback & system notification controls.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer(
     audioLoadConfiguration: const AudioLoadConfiguration(
       androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 10),
-        maxBufferDuration: Duration(seconds: 45),
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 60),
         prioritizeTimeOverSizeThresholds: true,
       ),
     ),
   );
 
   static const String _innertubeUa = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
-  HttpServer? _proxyServer;
-  http.Client? _activeStreamClient;
 
   BackgroundAudioHandler() {
     _init();
@@ -84,8 +119,8 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
-  /// Resolve Innertube Android direct stream URL
-  Future<String?> _resolveInnertubeStreamUrl(String videoId) async {
+  /// Resolve Innertube Android direct stream URL & content length
+  Future<(String, int)?> _resolveInnertubeStream(String videoId) async {
     final httpClient = http.Client();
     try {
       final resp = await httpClient.post(
@@ -125,7 +160,10 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
             return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
           });
 
-          return audioStreams.first['url'] as String;
+          final chosen = audioStreams.first;
+          final url = chosen['url'] as String;
+          final clen = int.tryParse(chosen['contentLength']?.toString() ?? '0') ?? 0;
+          return (url, clen);
         }
       }
     } catch (e) {
@@ -136,63 +174,24 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     return null;
   }
 
-  /// Start local streaming loopback proxy for ExoPlayer
-  Future<String> _startLocalProxy(String streamUrl) async {
-    _activeStreamClient?.close();
-    if (_proxyServer != null) {
-      await _proxyServer!.close(force: true);
-      _proxyServer = null;
-    }
-
-    _proxyServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final port = _proxyServer!.port;
-
-    _proxyServer!.listen((HttpRequest request) async {
-      final client = http.Client();
-      _activeStreamClient = client;
-      try {
-        final req = http.Request('GET', Uri.parse(streamUrl));
-        req.headers['User-Agent'] = _innertubeUa;
-
-        // Forward range headers if ExoPlayer requests seeking
-        final range = request.headers.value('range');
-        if (range != null) {
-          req.headers['Range'] = range;
-        }
-
-        final streamed = await client.send(req);
-        request.response.statusCode = streamed.statusCode;
-        request.response.headers.contentType = ContentType.parse('audio/mp4');
-        if (streamed.contentLength != null) {
-          request.response.headers.contentLength = streamed.contentLength!;
-        }
-        await request.response.addStream(streamed.stream);
-        await request.response.close();
-      } catch (e) {
-        try {
-          request.response.statusCode = HttpStatus.internalServerError;
-          await request.response.close();
-        } catch (_) {}
-      }
-    });
-
-    return 'http://127.0.0.1:$port/stream.m4a';
-  }
-
-  /// Play online song natively with ExoPlayer Foreground Service (GoTube style)
+  /// Play online song natively with ExoPlayer StreamAudioSource
   Future<void> playOnline(String videoId, MediaItem item) async {
     mediaItem.add(item);
     try {
       await _player.stop();
-      final streamUrl = await _resolveInnertubeStreamUrl(videoId);
-      if (streamUrl == null) {
+      final streamInfo = await _resolveInnertubeStream(videoId);
+      if (streamInfo == null) {
         throw Exception('Stream URL resolution failed');
       }
 
-      final proxyUrl = await _startLocalProxy(streamUrl);
-      debugPrint('[AudioHandler] Streaming native ExoPlayer via local proxy: ${item.title} -> $proxyUrl');
+      final (url, clen) = streamInfo;
+      debugPrint('[AudioHandler] Streaming native ExoPlayer via StreamAudioSource: ${item.title}');
       await _player.setAudioSource(
-        AudioSource.uri(Uri.parse(proxyUrl)),
+        InnertubeAudioSource(
+          streamUrl: url,
+          contentLength: clen,
+          userAgent: _innertubeUa,
+        ),
         preload: true,
       );
       await _player.play();
@@ -206,12 +205,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> playFile(String path, MediaItem item) async {
     mediaItem.add(item);
     try {
-      _activeStreamClient?.close();
-      if (_proxyServer != null) {
-        await _proxyServer!.close(force: true);
-        _proxyServer = null;
-      }
-
       await _player.stop();
       await _player.setAudioSource(
         AudioSource.uri(Uri.file(path)),
@@ -245,11 +238,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> stop() async {
-    _activeStreamClient?.close();
-    if (_proxyServer != null) {
-      await _proxyServer!.close(force: true);
-      _proxyServer = null;
-    }
     await _player.stop();
     playbackState.add(playbackState.value.copyWith(
       processingState: AudioProcessingState.idle,
@@ -267,11 +255,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> customAction(String name, [Map<String, dynamic>? extras]) async {
     if (name == 'dispose') {
-      _activeStreamClient?.close();
-      if (_proxyServer != null) {
-        await _proxyServer!.close(force: true);
-        _proxyServer = null;
-      }
       await _player.dispose();
       await super.stop();
     }
