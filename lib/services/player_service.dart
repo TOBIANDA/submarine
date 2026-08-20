@@ -4,8 +4,7 @@ import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
-import 'package:just_audio/just_audio.dart' hide PlayerState;
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../models/video_item.dart';
 import '../models/play_history.dart';
@@ -22,7 +21,6 @@ class PlayerService extends ChangeNotifier {
   factory PlayerService() => _instance ??= PlayerService._();
 
   BackgroundAudioHandler? _audioHandler;
-  YoutubePlayerController? _ytController;
 
   // ─── State ─────────────────────────────────
   VideoItem? _currentVideo;
@@ -52,100 +50,39 @@ class PlayerService extends ChangeNotifier {
   // Callback to invalidate history provider
   VoidCallback? onHistoryUpdated;
 
-  YoutubePlayerController get youtubeController {
-    return _ytController ??= YoutubePlayerController(
-      initialVideoId: '',
-      flags: const YoutubePlayerFlags(
-        autoPlay: true,
-        mute: false,
-        disableDragSeek: false,
-        loop: false,
-        isLive: false,
-        forceHD: false,
-        enableCaption: false,
-        showLiveFullscreenButton: false,
-      ),
-    )..addListener(_onYoutubePlayerChanged);
-  }
-
-  void _onYoutubePlayerChanged() {
-    if (_ytController == null || _isPlayingOffline) return;
-    final value = _ytController!.value;
-
-    _currentPosition = value.position;
-    _positionController.add(_currentPosition);
-
-    if (_currentPosition.inSeconds >= 4) {
-      _hasPlayedCurrentSong = true;
-    }
-
-    if (value.metaData.duration > Duration.zero) {
-      _currentDuration = value.metaData.duration;
-      _durationController.add(_currentDuration);
-
-      final curItem = _audioHandler?.mediaItem.value;
-      if (curItem != null && curItem.duration != _currentDuration) {
-        _audioHandler?.mediaItem.add(curItem.copyWith(duration: _currentDuration));
-      }
-    }
-
-    final playing = value.isPlaying;
-    if (_isPlaying != playing) {
-      _isPlaying = playing;
-      final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
-      if (item != null) {
-        _audioHandler?.updateNotification(item, isPlaying: playing);
-      }
-      notifyListeners();
-    }
-
-    // Auto next track ONLY when ended AND song has played
-    if (value.playerState == PlayerState.ended && _hasPlayedCurrentSong) {
-      debugPrint('[Player] Track ended naturally, playing next...');
-      _hasPlayedCurrentSong = false;
-      playNext();
-    }
-  }
-
   // ─── Init ──────────────────────────────────
   void init(BackgroundAudioHandler handler) {
     _audioHandler = handler;
 
-    // Listen to playback state from offline audio_service
+    // Listen to playback state from audio_service
     handler.playbackState.listen((state) {
-      if (_isPlayingOffline) {
-        final playing = state.playing;
-        if (_isPlaying != playing) {
-          _isPlaying = playing;
-          notifyListeners();
-        }
+      final playing = state.playing;
+      if (_isPlaying != playing) {
+        _isPlaying = playing;
+        notifyListeners();
       }
     });
 
     handler.player.positionStream.listen((pos) {
-      if (_isPlayingOffline) {
-        _currentPosition = pos;
-        _positionController.add(pos);
-        if (pos.inSeconds >= 4) {
-          _hasPlayedCurrentSong = true;
-        }
+      _currentPosition = pos;
+      _positionController.add(pos);
+      if (pos.inSeconds >= 4) {
+        _hasPlayedCurrentSong = true;
       }
     });
 
     handler.player.durationStream.listen((dur) {
-      if (_isPlayingOffline && dur != null && dur > Duration.zero) {
+      if (dur != null && dur > Duration.zero) {
         _currentDuration = dur;
         _durationController.add(dur);
       }
     });
 
     handler.player.playerStateStream.listen((state) {
-      if (_isPlayingOffline) {
-        if (state.processingState == ProcessingState.completed && _hasPlayedCurrentSong) {
-          debugPrint('[Player] Offline track ended naturally, playing next...');
-          _hasPlayedCurrentSong = false;
-          playNext();
-        }
+      if (state.processingState == ProcessingState.completed && _hasPlayedCurrentSong) {
+        debugPrint('[Player] Track ended naturally, playing next...');
+        _hasPlayedCurrentSong = false;
+        playNext();
       }
     });
 
@@ -298,34 +235,19 @@ class PlayerService extends ChangeNotifier {
     _isPlaying = false;
     _isPlayingOffline = false;
     _hasPlayedCurrentSong = false;
-    if (_ytController != null) {
-      _ytController!.pause();
-      _ytController!.cue('');
-    }
     _audioHandler?.stop();
     notifyListeners();
   }
 
   void togglePlay() {
-    if (_isPlayingOffline) {
-      if (_isPlaying) {
-        _audioHandler?.player.pause();
-        _isPlaying = false;
-      } else {
-        _audioHandler?.player.play();
-        _isPlaying = true;
-      }
-      notifyListeners();
+    if (_isPlaying) {
+      _audioHandler?.player.pause();
+      _isPlaying = false;
     } else {
-      if (_isPlaying) {
-        youtubeController.pause();
-        _isPlaying = false;
-      } else {
-        youtubeController.play();
-        _isPlaying = true;
-      }
-      notifyListeners();
+      _audioHandler?.player.play();
+      _isPlaying = true;
     }
+    notifyListeners();
   }
 
   void toggleShuffle() {
@@ -346,11 +268,7 @@ class PlayerService extends ChangeNotifier {
   void seek(Duration position) {
     _currentPosition = position;
     _positionController.add(position);
-    if (_isPlayingOffline) {
-      _audioHandler?.player.seek(position);
-    } else {
-      youtubeController.seekTo(position);
-    }
+    _audioHandler?.player.seek(position);
     notifyListeners();
   }
 
@@ -432,26 +350,23 @@ class PlayerService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final mediaItem = _buildMediaItem(video);
+
       // 1. Cek file offline lokal
       final downloaded = await DbService().getDownload(video.videoId);
       bool playedOffline = false;
 
       if (downloaded != null && File(downloaded.localPath).existsSync() && File(downloaded.localPath).lengthSync() > 50000) {
         debugPrint('[Player] Memutar dari file offline: ${downloaded.localPath}');
-        final mediaItem = _buildMediaItem(video);
         if (_loadId != currentLoadId) return;
         try {
-          if (_ytController != null) {
-            _ytController!.pause();
-            _ytController!.cue('');
-          }
           await _audioHandler!.playFile(downloaded.localPath, mediaItem);
           if (_loadId != currentLoadId) return;
           _isPlayingOffline = true;
           playedOffline = true;
           _isPlaying = true;
         } catch (e) {
-          debugPrint('[Player] Offline file load failed, fallback to YouTube: $e');
+          debugPrint('[Player] Offline file load failed, fallback to online: $e');
           playedOffline = false;
         }
       }
@@ -460,13 +375,9 @@ class PlayerService extends ChangeNotifier {
         if (_loadId != currentLoadId) return;
         _isPlayingOffline = false;
 
-        final mediaItem = _buildMediaItem(video);
-        
-        // Update notification & mediaSession
-        await _audioHandler!.updateNotification(mediaItem, isPlaying: true);
-
-        debugPrint('[Player] Loading YouTube Video via Resilient Background Player: ${video.title} (${video.videoId})');
-        youtubeController.load(video.videoId);
+        debugPrint('[Player] Streaming online native ExoPlayer: ${video.title} (${video.videoId})');
+        await _audioHandler!.playOnline(video.videoId, mediaItem);
+        if (_loadId != currentLoadId) return;
         _isPlaying = true;
       }
     } catch (e) {

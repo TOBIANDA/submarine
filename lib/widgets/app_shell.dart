@@ -8,7 +8,6 @@ import '../providers/player_provider.dart';
 import '../services/player_service.dart';
 import '../services/permission_service.dart';
 import '../theme/app_theme.dart';
-import 'youtube_background_player.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
@@ -37,20 +36,6 @@ class _AppShellState extends ConsumerState<AppShell> {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Player Engine (Virtual Display Texture)
-          Positioned(
-            left: 0,
-            top: 0,
-            width: 1,
-            height: 1,
-            child: Opacity(
-              opacity: 0.01,
-              child: YoutubeBackgroundPlayer(
-                controller: player.youtubeController,
-              ),
-            ),
-          ),
-
           widget.navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
@@ -232,7 +217,6 @@ class _MusicMiniPlayer extends StatelessWidget {
                     icon: Icon(
                       Icons.skip_next_rounded,
                       color: player.hasNext ? Colors.white : Colors.white24,
-                      size: 24,
                     ),
                     onPressed: player.hasNext ? player.playNext : null,
                     padding: EdgeInsets.zero,

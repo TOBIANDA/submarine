@@ -1,13 +1,25 @@
 ﻿// lib/services/audio_handler.dart
 import 'dart:async';
+import 'dart:convert';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 
-/// BackgroundAudioHandler - provides system media notification & controls.
+/// BackgroundAudioHandler - provides native ExoPlayer foreground audio playback & system notification controls.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer(
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 60),
+        prioritizeTimeOverSizeThresholds: true,
+      ),
+    ),
+  );
+
+  static const String _innertubeUa = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
 
   BackgroundAudioHandler() {
     _init();
@@ -19,6 +31,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
+    // Listen to ExoPlayer playback events
     _player.playerStateStream.listen((state) {
       final playing = state.playing;
       final proc = state.processingState;
@@ -57,33 +70,92 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         androidCompactActionIndices: const [0, 1, 2],
       ));
     });
+
+    _player.durationStream.listen((dur) {
+      if (dur != null && dur > Duration.zero) {
+        final cur = mediaItem.value;
+        if (cur != null && cur.duration != dur) {
+          mediaItem.add(cur.copyWith(duration: dur));
+        }
+      }
+    });
   }
 
-  /// Update system notification with current song details and playing state
-  Future<void> updateNotification(MediaItem item, {required bool isPlaying}) async {
+  /// Resolve Innertube Android direct stream URL
+  Future<String?> _resolveInnertubeStreamUrl(String videoId) async {
+    final httpClient = http.Client();
+    try {
+      final resp = await httpClient.post(
+        Uri.parse('https://www.youtube.com/youtubei/v1/player'),
+        headers: {
+          'User-Agent': _innertubeUa,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'context': {
+            'client': {
+              'clientName': 'ANDROID',
+              'clientVersion': '20.10.38',
+              'androidSdkVersion': 30,
+              'userAgent': _innertubeUa,
+              'hl': 'en',
+              'gl': 'US',
+            }
+          },
+          'videoId': videoId,
+        }),
+      ).timeout(const Duration(seconds: 8));
+
+      if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
+        final audioStreams = formats.where((f) {
+          final mime = f['mimeType'] as String? ?? '';
+          return mime.startsWith('audio/') && f['url'] != null;
+        }).toList();
+
+        if (audioStreams.isNotEmpty) {
+          audioStreams.sort((a, b) {
+            final a140 = (a['itag'] == 140) ? 1 : 0;
+            final b140 = (b['itag'] == 140) ? 1 : 0;
+            if (a140 != b140) return b140.compareTo(a140);
+            return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
+          });
+
+          return audioStreams.first['url'] as String;
+        }
+      }
+    } catch (e) {
+      debugPrint('[AudioHandler] Resolve Innertube URL error: $e');
+    } finally {
+      httpClient.close();
+    }
+    return null;
+  }
+
+  /// Play online song natively with ExoPlayer Foreground Service (GoTube style)
+  Future<void> playOnline(String videoId, MediaItem item) async {
     mediaItem.add(item);
-    playbackState.add(playbackState.value.copyWith(
-      processingState: AudioProcessingState.ready,
-      playing: isPlaying,
-      controls: [
-        MediaControl.skipToPrevious,
-        isPlaying ? MediaControl.pause : MediaControl.play,
-        MediaControl.skipToNext,
-        MediaControl.stop,
-      ],
-      systemActions: const {
-        MediaAction.seek,
-        MediaAction.seekForward,
-        MediaAction.seekBackward,
-        MediaAction.play,
-        MediaAction.pause,
-        MediaAction.playPause,
-        MediaAction.skipToNext,
-        MediaAction.skipToPrevious,
-        MediaAction.stop,
-      },
-      androidCompactActionIndices: const [0, 1, 2],
-    ));
+    try {
+      await _player.stop();
+      final streamUrl = await _resolveInnertubeStreamUrl(videoId);
+      if (streamUrl == null) {
+        throw Exception('Stream URL resolution failed');
+      }
+
+      debugPrint('[AudioHandler] Streaming native ExoPlayer: ${item.title}');
+      await _player.setAudioSource(
+        AudioSource.uri(
+          Uri.parse(streamUrl),
+          headers: {'User-Agent': _innertubeUa},
+        ),
+        preload: true,
+      );
+      await _player.play();
+    } catch (e) {
+      debugPrint('[AudioHandler] playOnline error: $e');
+      rethrow;
+    }
   }
 
   /// Play offline local file
@@ -104,9 +176,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> updateMediaItem(MediaItem item) async {
-    mediaItem.add(item);
-  }
+  Future<void> updateMediaItem(MediaItem item) async => mediaItem.add(item);
 
   @override
   Future<void> play() async {
