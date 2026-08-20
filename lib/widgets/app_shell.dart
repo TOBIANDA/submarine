@@ -3,19 +3,50 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
 import '../theme/app_theme.dart';
-import 'background_youtube_player.dart';
 
-class AppShell extends ConsumerWidget {
+class AppShell extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
 
   const AppShell({super.key, required this.navigationShell});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // When the app is paused/hidden (user switches apps or turns screen off),
+    // immediately re-trigger YouTube audio play to prevent Android WebView from pausing.
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
+      final player = ref.read(playerServiceProvider);
+      if (player.isPlaying) {
+        Future.delayed(const Duration(milliseconds: 150), () {
+          player.youtubeController.play();
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final player = ref.watch(playerServiceProvider);
     final currentVideo = player.currentVideo;
 
@@ -23,13 +54,20 @@ class AppShell extends ConsumerWidget {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Audio Engine (Never paused by Activity lifecycle)
-          const Align(
-            alignment: Alignment.topLeft,
-            child: BackgroundYoutubePlayer(),
+          // Background YouTube Player Widget (keeps webview active & playing audio)
+          Offstage(
+            offstage: true,
+            child: SizedBox(
+              width: 100,
+              height: 100,
+              child: YoutubePlayer(
+                controller: player.youtubeController,
+                showVideoProgressIndicator: false,
+              ),
+            ),
           ),
 
-          navigationShell,
+          widget.navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
           if (currentVideo != null)
@@ -39,7 +77,7 @@ class AppShell extends ConsumerWidget {
             ),
         ],
       ),
-      bottomNavigationBar: _BottomNavBar(navigationShell: navigationShell),
+      bottomNavigationBar: _BottomNavBar(navigationShell: widget.navigationShell),
     );
   }
 }
