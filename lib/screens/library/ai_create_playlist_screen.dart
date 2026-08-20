@@ -289,8 +289,8 @@ class _InputView extends StatelessWidget {
           Slider(
             value: songCount.toDouble(),
             min: 5,
-            max: 25,
-            divisions: 4,
+              max: 60,
+              divisions: 11,
             activeColor: AppTheme.aiColor,
             inactiveColor: AppTheme.surface.withValues(alpha: 0.5),
             label: songCount.toString(),
@@ -573,4 +573,5 @@ class _PreviewView extends StatelessWidget {
     );
   }
 }
+
 
