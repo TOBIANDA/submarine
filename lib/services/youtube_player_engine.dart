@@ -8,58 +8,84 @@ class YoutubePlayerEngine {
   YoutubePlayerEngine._();
   factory YoutubePlayerEngine() => _instance ??= YoutubePlayerEngine._();
 
+  HeadlessInAppWebView? _headlessWebView;
   InAppWebViewController? _controller;
   bool _isReady = false;
-  String? _currentVideoId;
+  String? _pendingVideoId;
 
   // Callbacks
   Function(Duration position, Duration duration)? onProgress;
   Function(bool isPlaying)? onPlaybackStateChanged;
   VoidCallback? onEnded;
 
-  void attachController(InAppWebViewController controller) {
-    _controller = controller;
-    debugPrint('[YT-Engine] Attached WebViewController');
+  Future<void> init() async {
+    if (_headlessWebView != null) return;
 
-    controller.addJavaScriptHandler(
-      handlerName: 'onPlayerReady',
-      callback: (args) {
-        debugPrint('[YT-Engine] Player is READY');
-        _isReady = true;
+    debugPrint('[YT-Engine] Initializing HeadlessInAppWebView for background audio...');
+    _headlessWebView = HeadlessInAppWebView(
+      initialSettings: InAppWebViewSettings(
+        mediaPlaybackRequiresUserGesture: false,
+        allowsInlineMediaPlayback: true,
+        javaScriptEnabled: true,
+        cacheEnabled: true,
+        userAgent:
+            'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      ),
+      onWebViewCreated: (controller) {
+        _controller = controller;
+        debugPrint('[YT-Engine] Headless Controller created');
+
+        controller.addJavaScriptHandler(
+          handlerName: 'onPlayerReady',
+          callback: (args) {
+            debugPrint('[YT-Engine] HTML5 Player is READY');
+            _isReady = true;
+            if (_pendingVideoId != null) {
+              final vid = _pendingVideoId!;
+              _pendingVideoId = null;
+              loadVideo(vid);
+            }
+          },
+        );
+
+        controller.addJavaScriptHandler(
+          handlerName: 'onPlayerStateChange',
+          callback: (args) {
+            final state = args[0] as int?;
+            debugPrint('[YT-Engine] State change: $state');
+            // 1 = PLAYING, 2 = PAUSED, 0 = ENDED, 3 = BUFFERING
+            if (state == 1) {
+              onPlaybackStateChanged?.call(true);
+            } else if (state == 2) {
+              onPlaybackStateChanged?.call(false);
+            } else if (state == 0) {
+              onPlaybackStateChanged?.call(false);
+              onEnded?.call();
+            }
+          },
+        );
+
+        controller.addJavaScriptHandler(
+          handlerName: 'onPlayerProgress',
+          callback: (args) {
+            if (args.isNotEmpty && args[0] is Map) {
+              final map = Map<String, dynamic>.from(args[0] as Map);
+              final cur = (map['currentTime'] as num?)?.toDouble() ?? 0.0;
+              final dur = (map['duration'] as num?)?.toDouble() ?? 0.0;
+              onProgress?.call(
+                Duration(milliseconds: (cur * 1000).toInt()),
+                Duration(milliseconds: (dur * 1000).toInt()),
+              );
+            }
+          },
+        );
+      },
+      onLoadStop: (controller, url) {
+        debugPrint('[YT-Engine] Webview loaded');
       },
     );
 
-    controller.addJavaScriptHandler(
-      handlerName: 'onPlayerStateChange',
-      callback: (args) {
-        final state = args[0] as int?;
-        debugPrint('[YT-Engine] State change: $state');
-        // 1 = PLAYING, 2 = PAUSED, 0 = ENDED, 3 = BUFFERING
-        if (state == 1) {
-          onPlaybackStateChanged?.call(true);
-        } else if (state == 2) {
-          onPlaybackStateChanged?.call(false);
-        } else if (state == 0) {
-          onPlaybackStateChanged?.call(false);
-          onEnded?.call();
-        }
-      },
-    );
-
-    controller.addJavaScriptHandler(
-      handlerName: 'onPlayerProgress',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final map = Map<String, dynamic>.from(args[0] as Map);
-          final cur = (map['currentTime'] as num?)?.toDouble() ?? 0.0;
-          final dur = (map['duration'] as num?)?.toDouble() ?? 0.0;
-          onProgress?.call(
-            Duration(milliseconds: (cur * 1000).toInt()),
-            Duration(milliseconds: (dur * 1000).toInt()),
-          );
-        }
-      },
-    );
+    await _headlessWebView?.run();
   }
 
   String _buildHtml(String videoId) {
@@ -69,8 +95,7 @@ class YoutubePlayerEngine {
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin:0; padding:0; background:black; overflow:hidden; }
-    #player { width:100vw; height:100vh; }
+    body { margin:0; padding:0; background:black; }
   </style>
   <script src="https://www.youtube.com/iframe_api"></script>
 </head>
@@ -121,9 +146,13 @@ class YoutubePlayerEngine {
   }
 
   Future<void> loadVideo(String videoId) async {
-    _currentVideoId = videoId;
+    _pendingVideoId = videoId;
+    if (_controller == null) {
+      await init();
+    }
+
     final html = _buildHtml(videoId);
-    debugPrint('[YT-Engine] Loading HTML for video $videoId');
+    debugPrint('[YT-Engine] Loading HTML for video $videoId into Headless WebView');
     await _controller?.loadData(
       data: html,
       baseUrl: WebUri('https://www.youtube.com'),
@@ -146,7 +175,13 @@ class YoutubePlayerEngine {
   }
 
   Future<void> stop() async {
-    _currentVideoId = null;
+    _pendingVideoId = null;
     await _controller?.evaluateJavascript(source: 'if(player && player.stopVideo) player.stopVideo();');
+  }
+
+  void dispose() {
+    _headlessWebView?.dispose();
+    _headlessWebView = null;
+    _controller = null;
   }
 }

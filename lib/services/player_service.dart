@@ -3,9 +3,8 @@ import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
-import 'package:just_audio/just_audio.dart' hide PlayerState;
+import 'package:just_audio/just_audio.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
 import '../models/video_item.dart';
 import '../models/play_history.dart';
@@ -13,6 +12,7 @@ import 'audio_handler.dart';
 import 'db_service.dart';
 import 'youtube_service.dart';
 import 'ai_service.dart';
+import 'youtube_player_engine.dart';
 
 export 'package:just_audio/just_audio.dart' show AudioPlayer, ProcessingState;
 
@@ -25,7 +25,6 @@ class PlayerService extends ChangeNotifier {
 
   BackgroundAudioHandler? _audioHandler;
   final YoutubeExplode _yt = YoutubeExplode();
-  YoutubePlayerController? _ytController;
 
   // ─── State ─────────────────────────────────
   VideoItem? _currentVideo;
@@ -53,56 +52,6 @@ class PlayerService extends ChangeNotifier {
 
   // Callback to invalidate history provider
   VoidCallback? onHistoryUpdated;
-
-  YoutubePlayerController get youtubeController {
-    return _ytController ??= YoutubePlayerController(
-      initialVideoId: '',
-      flags: const YoutubePlayerFlags(
-        autoPlay: true,
-        mute: false,
-        disableDragSeek: false,
-        loop: false,
-        isLive: false,
-        forceHD: false,
-        enableCaption: false,
-        showLiveFullscreenButton: false,
-      ),
-    )..addListener(_onYoutubePlayerChanged);
-  }
-
-  void _onYoutubePlayerChanged() {
-    if (_ytController == null || _isPlayingOffline) return;
-    final value = _ytController!.value;
-
-    _currentPosition = value.position;
-    _positionController.add(_currentPosition);
-
-    if (value.metaData.duration > Duration.zero) {
-      _currentDuration = value.metaData.duration;
-      _durationController.add(_currentDuration);
-
-      final curItem = _audioHandler?.mediaItem.value;
-      if (curItem != null && curItem.duration != _currentDuration) {
-        _audioHandler?.mediaItem.add(curItem.copyWith(duration: _currentDuration));
-      }
-    }
-
-    final playing = value.isPlaying;
-    if (_isPlaying != playing) {
-      _isPlaying = playing;
-      _audioHandler?.playbackState.add(
-        _audioHandler!.playbackState.value.copyWith(
-          playing: playing,
-          processingState: AudioProcessingState.ready,
-        ),
-      );
-      notifyListeners();
-    }
-
-    if (value.playerState == PlayerState.ended) {
-      playNext();
-    }
-  }
 
   // ─── Init ──────────────────────────────────
   void init(BackgroundAudioHandler handler) {
@@ -140,6 +89,50 @@ class PlayerService extends ChangeNotifier {
         playPrevious();
       }
     });
+
+    // Initialize headless background engine
+    final ytEngine = YoutubePlayerEngine();
+    ytEngine.init();
+
+    ytEngine.onPlaybackStateChanged = (playing) {
+      if (!_isPlayingOffline) {
+        _isPlaying = playing;
+        _audioHandler?.playbackState.add(
+          _audioHandler!.playbackState.value.copyWith(
+            playing: playing,
+            processingState: AudioProcessingState.ready,
+          ),
+        );
+        notifyListeners();
+      }
+    };
+
+    ytEngine.onProgress = (pos, dur) {
+      if (!_isPlayingOffline) {
+        _currentPosition = pos;
+        _currentDuration = dur;
+        _positionController.add(pos);
+        _durationController.add(dur);
+
+        final curItem = _audioHandler?.mediaItem.value;
+        if (curItem != null && curItem.duration != dur && dur > Duration.zero) {
+          _audioHandler?.mediaItem.add(curItem.copyWith(duration: dur));
+        }
+
+        _audioHandler?.playbackState.add(
+          _audioHandler!.playbackState.value.copyWith(
+            updatePosition: pos,
+            bufferedPosition: pos + const Duration(seconds: 15),
+          ),
+        );
+      }
+    };
+
+    ytEngine.onEnded = () {
+      if (!_isPlayingOffline) {
+        playNext();
+      }
+    };
   }
 
   // ─── Getters ───────────────────────────────
@@ -325,10 +318,7 @@ class PlayerService extends ChangeNotifier {
     _currentIndex = -1;
     _isPlaying = false;
     _isPlayingOffline = false;
-    if (_ytController != null) {
-      _ytController!.pause();
-      _ytController!.cue('');
-    }
+    YoutubePlayerEngine().stop();
     _audioHandler?.stop();
     notifyListeners();
   }
@@ -342,10 +332,10 @@ class PlayerService extends ChangeNotifier {
       }
     } else {
       if (_isPlaying) {
-        youtubeController.pause();
+        YoutubePlayerEngine().pause();
         _isPlaying = false;
       } else {
-        youtubeController.play();
+        YoutubePlayerEngine().play();
         _isPlaying = true;
       }
       notifyListeners();
@@ -380,7 +370,7 @@ class PlayerService extends ChangeNotifier {
     if (_isPlayingOffline) {
       _audioHandler?.player.seek(position);
     } else {
-      youtubeController.seekTo(position);
+      YoutubePlayerEngine().seekTo(position);
     }
     notifyListeners();
   }
@@ -471,10 +461,7 @@ class PlayerService extends ChangeNotifier {
         final mediaItem = _buildMediaItem(video);
         if (_loadId != currentLoadId) return;
         try {
-          if (_ytController != null) {
-            _ytController!.pause();
-            _ytController!.cue('');
-          }
+          await YoutubePlayerEngine().stop();
           await _audioHandler!.loadUrl(downloaded.localPath, mediaItem);
           if (_loadId != currentLoadId) return;
 
@@ -502,8 +489,8 @@ class PlayerService extends ChangeNotifier {
           ),
         );
 
-        debugPrint('[Player] 🚀 Loading YouTube Video via YoutubePlayer: ${video.title} (${video.videoId})');
-        youtubeController.load(video.videoId);
+        debugPrint('[Player] 🚀 Loading YouTube Video via Headless Engine: ${video.title} (${video.videoId})');
+        await YoutubePlayerEngine().loadVideo(video.videoId);
         _isPlaying = true;
       }
     } catch (e) {
@@ -569,9 +556,7 @@ class PlayerService extends ChangeNotifier {
   void dispose() {
     _positionController.close();
     _durationController.close();
-    _ytController?.dispose();
     _yt.close();
     super.dispose();
   }
 }
-

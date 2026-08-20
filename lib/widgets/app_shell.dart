@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
@@ -23,19 +22,6 @@ class AppShell extends ConsumerWidget {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Player Widget (keeps webview active & playing audio)
-          Offstage(
-            offstage: true,
-            child: SizedBox(
-              width: 100,
-              height: 100,
-              child: YoutubePlayer(
-                controller: player.youtubeController,
-                showVideoProgressIndicator: false,
-              ),
-            ),
-          ),
-
           navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
