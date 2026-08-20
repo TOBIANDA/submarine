@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
 import '../services/permission_service.dart';
+import '../services/youtube_player_engine.dart';
 import '../theme/app_theme.dart';
 
 class AppShell extends ConsumerStatefulWidget {
@@ -38,7 +40,38 @@ class _AppShellState extends ConsumerState<AppShell> {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
+          // Background YouTube Audio Engine (100% immune to 403 & background pauses)
+          Positioned(
+            left: 0,
+            top: 0,
+            width: 10,
+            height: 10,
+            child: Opacity(
+              opacity: 0.01,
+              child: InAppWebView(
+                initialSettings: InAppWebViewSettings(
+                  userAgent: 'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                  mediaPlaybackRequiresUserGesture: false,
+                  transparentBackground: true,
+                  disableContextMenu: true,
+                  supportZoom: false,
+                  disableHorizontalScroll: true,
+                  disableVerticalScroll: true,
+                  allowsInlineMediaPlayback: true,
+                  allowsAirPlayForMediaPlayback: true,
+                  allowsPictureInPictureMediaPlayback: true,
+                  useWideViewPort: false,
+                  useHybridComposition: false,
+                ),
+                onWebViewCreated: (webController) {
+                  YoutubePlayerEngine().attachController(webController);
+                },
+              ),
+            ),
+          ),
+
           widget.navigationShell,
+
           // Mini Player overlay above content (Dismissible with horizontal swipe)
           if (currentVideo != null)
             Align(

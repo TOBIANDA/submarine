@@ -4,13 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class YoutubePlayerEngine {
-  void init() {}
   static YoutubePlayerEngine? _instance;
   YoutubePlayerEngine._();
   factory YoutubePlayerEngine() => _instance ??= YoutubePlayerEngine._();
 
   InAppWebViewController? _controller;
-  bool _isReady = false;
   String? _pendingVideoId;
 
   // Callbacks
@@ -26,7 +24,6 @@ class YoutubePlayerEngine {
       handlerName: 'onPlayerReady',
       callback: (args) {
         debugPrint('[YT-Engine] YouTube HTML5 Player is READY');
-        _isReady = true;
         if (_pendingVideoId != null) {
           final id = _pendingVideoId!;
           _pendingVideoId = null;
@@ -78,11 +75,24 @@ class YoutubePlayerEngine {
     body { margin:0; padding:0; background:black; }
     #player { width:100%; height:100%; }
   </style>
-  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
   <div id="player"></div>
   <script>
+    // Anti Background Pause & Screen Off Freeze
+    try {
+      Object.defineProperty(document, 'hidden', { value: false, writable: false });
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
+      document.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+      window.addEventListener('blur', function(e) { e.stopImmediatePropagation(); }, true);
+      window.addEventListener('pagehide', function(e) { e.stopImmediatePropagation(); }, true);
+    } catch(e) {}
+
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    var firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
     var player;
     function onYouTubeIframeAPIReady() {
       player = new YT.Player('player', {
@@ -161,4 +171,3 @@ class YoutubePlayerEngine {
     await _controller?.evaluateJavascript(source: 'if(player && player.stopVideo) player.stopVideo();');
   }
 }
-
