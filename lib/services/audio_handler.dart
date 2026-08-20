@@ -5,7 +5,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
-/// BackgroundAudioHandler - drives native ExoPlayer via audio_service Foreground Service.
+/// BackgroundAudioHandler - provides system media notification & controls.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
 
@@ -57,27 +57,33 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         androidCompactActionIndices: const [0, 1, 2],
       ));
     });
-
-    _player.positionStream.listen((pos) {
-      playbackState.add(playbackState.value.copyWith(updatePosition: pos));
-    });
   }
 
-  /// Play stream URL directly with ExoPlayer (points to local proxy or direct stream)
-  Future<void> playStreamUrl(String url, MediaItem item) async {
+  /// Update system notification with current song details and playing state
+  Future<void> updateNotification(MediaItem item, {required bool isPlaying}) async {
     mediaItem.add(item);
-    try {
-      await _player.stop();
-      await _player.setAudioSource(
-        AudioSource.uri(Uri.parse(url)),
-        preload: true,
-      );
-      await _player.play();
-      debugPrint('[AudioHandler] Playing native ExoPlayer stream: ${item.title}');
-    } catch (e) {
-      debugPrint('[AudioHandler] playStreamUrl error: $e');
-      rethrow;
-    }
+    playbackState.add(playbackState.value.copyWith(
+      processingState: AudioProcessingState.ready,
+      playing: isPlaying,
+      controls: [
+        MediaControl.skipToPrevious,
+        isPlaying ? MediaControl.pause : MediaControl.play,
+        MediaControl.skipToNext,
+        MediaControl.stop,
+      ],
+      systemActions: const {
+        MediaAction.seek,
+        MediaAction.seekForward,
+        MediaAction.seekBackward,
+        MediaAction.play,
+        MediaAction.pause,
+        MediaAction.playPause,
+        MediaAction.skipToNext,
+        MediaAction.skipToPrevious,
+        MediaAction.stop,
+      },
+      androidCompactActionIndices: const [0, 1, 2],
+    ));
   }
 
   /// Play offline local file
@@ -103,10 +109,16 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> play() async => _player.play();
+  Future<void> play() async {
+    customEvent.add('play');
+    await _player.play();
+  }
 
   @override
-  Future<void> pause() async => _player.pause();
+  Future<void> pause() async {
+    customEvent.add('pause');
+    await _player.pause();
+  }
 
   @override
   Future<void> seek(Duration position) async => _player.seek(position);

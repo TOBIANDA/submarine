@@ -4,11 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
-
-
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
 import '../theme/app_theme.dart';
+import 'youtube_background_player.dart';
 
 class AppShell extends ConsumerStatefulWidget {
   final StatefulNavigationShell navigationShell;
@@ -19,21 +18,7 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell>  {
-  @override
-  void initState() {
-    super.initState();
-    
-  }
-
-
-
-  @override
-  void dispose() {
-    
-    super.dispose();
-  }
-
+class _AppShellState extends ConsumerState<AppShell> {
   @override
   Widget build(BuildContext context) {
     final player = ref.watch(playerServiceProvider);
@@ -43,7 +28,19 @@ class _AppShellState extends ConsumerState<AppShell>  {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-
+          // Resilient YouTube Player Engine (Virtual Display Texture Layer: Immune to SurfaceView destruction on minimize)
+          Positioned(
+            left: 0,
+            top: 0,
+            width: 1,
+            height: 1,
+            child: Opacity(
+              opacity: 0.01,
+              child: YoutubeBackgroundPlayer(
+                controller: player.youtubeController,
+              ),
+            ),
+          ),
 
           widget.navigationShell,
 
@@ -113,126 +110,149 @@ class _MusicMiniPlayer extends StatelessWidget {
         ),
       ),
       child: GestureDetector(
-        onTap: () {
-          context.push('/player', extra: video);
-        },
+        onTap: () => context.push('/player'),
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-            color: AppTheme.surface.withOpacity(0.96),
+            color: const Color(0xFF1E1E2E).withOpacity(0.95),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: Colors.white.withOpacity(0.12),
-              width: 0.8,
+              color: AppTheme.primary.withOpacity(0.2),
+              width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.5),
-                blurRadius: 16,
+                color: Colors.black.withOpacity(0.4),
+                blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
             ],
           ),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // Thumbnail
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: CachedNetworkImage(
-                  imageUrl: video.thumbnailUrl,
-                  width: 44,
-                  height: 44,
-                  fit: BoxFit.cover,
-                  errorWidget: (_, __, ___) => Container(
-                    width: 44,
-                    height: 44,
-                    color: AppTheme.surfaceVariant,
-                    child: const Icon(Icons.music_note, color: AppTheme.textMuted, size: 22),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-
-              // Title & Artist
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      video.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+              Row(
+                children: [
+                  // Album Art Thumbnail
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: CachedNetworkImage(
+                      imageUrl: video.thumbnailUrl,
+                      width: 44,
+                      height: 44,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => Container(
+                        width: 44,
+                        height: 44,
+                        color: AppTheme.cardColor,
+                        child: const Icon(Icons.music_note, color: Colors.white54),
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      video.channelTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 11,
+                  ),
+                  const SizedBox(width: 10),
+
+                  // Song Title & Artist
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          video.title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          video.channelTitle,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.6),
+                            fontSize: 11,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Previous Button
+                  IconButton(
+                    icon: Icon(
+                      Icons.skip_previous_rounded,
+                      color: player.hasPrevious ? Colors.white : Colors.white24,
+                      size: 24,
+                    ),
+                    onPressed: player.hasPrevious ? player.playPrevious : null,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+
+                  // Play / Pause Button
+                  if (player.isLoadingAudio)
+                    const SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: Padding(
+                        padding: EdgeInsets.all(6),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
                       ),
+                    )
+                  else
+                    IconButton(
+                      icon: Icon(
+                        player.isPlaying
+                            ? Icons.pause_circle_filled_rounded
+                            : Icons.play_circle_fill_rounded,
+                        color: AppTheme.primary,
+                        size: 32,
+                      ),
+                      onPressed: player.togglePlay,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                     ),
-                  ],
-                ),
+
+                  // Next Button
+                  IconButton(
+                    icon: Icon(
+                      Icons.skip_next_rounded,
+                      color: player.hasNext ? Colors.white : Colors.white24,
+                      size: 24,
+                    ),
+                    onPressed: player.hasNext ? player.playNext : null,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                ],
               ),
 
-              // Controls
-              if (player.isLoadingAudio)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8.0),
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppTheme.primary,
+              // Progress Bar at bottom of miniplayer
+              const SizedBox(height: 6),
+              StreamBuilder<Duration>(
+                stream: player.positionStream,
+                builder: (context, snapshot) {
+                  final position = snapshot.data ?? Duration.zero;
+                  final duration = player.duration ?? Duration.zero;
+                  final progress = duration.inMilliseconds > 0
+                      ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
+                      : 0.0;
+
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      backgroundColor: Colors.white.withOpacity(0.1),
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primary),
+                      minHeight: 2,
                     ),
-                  ),
-                )
-              else
-                IconButton(
-                  icon: Icon(
-                    player.isPlaying
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                    color: AppTheme.primary,
-                    size: 28,
-                  ),
-                  onPressed: () => player.togglePlay(),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                ),
-
-              IconButton(
-                icon: const Icon(
-                  Icons.skip_next_rounded,
-                  color: AppTheme.textSecondary,
-                  size: 24,
-                ),
-                onPressed: player.hasNext ? () => player.playNext() : null,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              ),
-
-              // Close / Dismiss button
-              IconButton(
-                icon: const Icon(
-                  Icons.close_rounded,
-                  color: AppTheme.textMuted,
-                  size: 20,
-                ),
-                onPressed: () => player.stop(),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                tooltip: 'Tutup',
+                  );
+                },
               ),
             ],
           ),
@@ -243,7 +263,7 @@ class _MusicMiniPlayer extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// Bottom Nav Bar
+// Bottom Navigation Bar
 // ─────────────────────────────────────────────
 class _BottomNavBar extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
@@ -252,49 +272,41 @@ class _BottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Colors.white.withOpacity(0.08),
-            width: 0.5,
-          ),
+    return NavigationBar(
+      selectedIndex: navigationShell.currentIndex,
+      onDestinationSelected: (index) => navigationShell.goBranch(
+        index,
+        initialLocation: index == navigationShell.currentIndex,
+      ),
+      backgroundColor: AppTheme.surface,
+      indicatorColor: AppTheme.primary.withOpacity(0.15),
+      destinations: const [
+        NavigationDestination(
+          icon: Icon(Icons.home_outlined),
+          selectedIcon: Icon(Icons.home_rounded, color: AppTheme.primary),
+          label: 'Home',
         ),
-      ),
-      child: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: (index) {
-          navigationShell.goBranch(
-            index,
-            initialLocation: index == navigationShell.currentIndex,
-          );
-        },
-        backgroundColor: Colors.transparent,
-        indicatorColor: AppTheme.primary.withOpacity(0.18),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded, color: AppTheme.primary),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.search_outlined),
-            selectedIcon: Icon(Icons.search_rounded, color: AppTheme.primary),
-            label: 'Cari',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.library_music_outlined),
-            selectedIcon: Icon(Icons.library_music_rounded, color: AppTheme.primary),
-            label: 'Library',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.download_outlined),
-            selectedIcon: Icon(Icons.download_done_rounded, color: AppTheme.primary),
-            label: 'Download',
-          ),
-        ],
-      ),
+        NavigationDestination(
+          icon: Icon(Icons.search_outlined),
+          selectedIcon: Icon(Icons.search_rounded, color: AppTheme.primary),
+          label: 'Search',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.library_music_outlined),
+          selectedIcon: Icon(Icons.library_music_rounded, color: AppTheme.primary),
+          label: 'Library',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.download_outlined),
+          selectedIcon: Icon(Icons.download_rounded, color: AppTheme.primary),
+          label: 'Downloads',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.person_outline),
+          selectedIcon: Icon(Icons.person_rounded, color: AppTheme.primary),
+          label: 'Profile',
+        ),
+      ],
     );
   }
 }
