@@ -2,12 +2,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:just_audio/just_audio.dart';
 
 import '../../models/video_item.dart';
 import '../../providers/player_provider.dart';
 import '../../services/player_service.dart' as player_service_mode;
 import '../../services/player_service.dart' show PlayerService;
 import '../../services/db_service.dart';
+import '../../models/playlist.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/add_to_playlist_sheet.dart';
 
@@ -59,6 +61,8 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
   Widget build(BuildContext context) {
     final player = ref.watch(playerServiceProvider);
     final currentVideo = player.currentVideo ?? widget.video;
+    final audioPlayer = player.audioPlayer;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: Container(
@@ -456,8 +460,6 @@ class _FullPlayerScreenState extends ConsumerState<FullPlayerScreen> {
     );
   }
 }
-
-
 
 
 

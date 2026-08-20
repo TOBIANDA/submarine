@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'submarine_youtube_player.dart';
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
@@ -17,9 +19,18 @@ class AppShell extends ConsumerStatefulWidget {
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> {
+class _AppShellState extends ConsumerState<AppShell>  {
+  @override
+  void initState() {
+    super.initState();
+    
+  }
+
+
+
   @override
   void dispose() {
+    
     super.dispose();
   }
 
@@ -32,7 +43,21 @@ class _AppShellState extends ConsumerState<AppShell> {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-              widget.navigationShell,
+          // Background YouTube Player Widget (keeps webview active & playing audio with valid GPU surface)
+          IgnorePointer(
+            child: Opacity(
+              opacity: 0.01,
+              child: SizedBox(
+                width: 100,
+                height: 100,
+                child: SubmarineYoutubePlayer(
+                  controller: player.youtubeController,
+                ),
+              ),
+            ),
+          ),
+
+          widget.navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
           if (currentVideo != null)
@@ -285,5 +310,3 @@ class _BottomNavBar extends StatelessWidget {
     );
   }
 }
-
-

@@ -32,6 +32,9 @@ final isPlayingProvider = Provider<bool>((ref) {
   return ref.watch(playerServiceProvider).isPlaying;
 });
 
+final audioFocusModeProvider = Provider<bool>((ref) {
+  return ref.watch(playerServiceProvider).audioFocusMode;
+});
 
 final repeatModeProvider = Provider<RepeatMode>((ref) {
   return ref.watch(playerServiceProvider).repeatMode;
@@ -48,4 +51,3 @@ final queueProvider = Provider<List<VideoItem>>((ref) {
 final isLoadingAudioProvider = Provider<bool>((ref) {
   return ref.watch(playerServiceProvider).isLoadingAudio;
 });
-
