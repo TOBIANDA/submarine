@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:youtube_player_flutter/youtube_player_flutter.dart';
-import 'submarine_youtube_player.dart';
+
+
 
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
@@ -43,19 +43,7 @@ class _AppShellState extends ConsumerState<AppShell>  {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Player Widget (keeps webview active & playing audio with valid GPU surface)
-          IgnorePointer(
-            child: Opacity(
-              opacity: 0.01,
-              child: SizedBox(
-                width: 100,
-                height: 100,
-                child: SubmarineYoutubePlayer(
-                  controller: player.youtubeController,
-                ),
-              ),
-            ),
-          ),
+
 
           widget.navigationShell,
 
