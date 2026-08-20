@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class YoutubePlayerEngine {
+  void init() {}
   static YoutubePlayerEngine? _instance;
   YoutubePlayerEngine._();
   factory YoutubePlayerEngine() => _instance ??= YoutubePlayerEngine._();
@@ -160,3 +161,4 @@ class YoutubePlayerEngine {
     await _controller?.evaluateJavascript(source: 'if(player && player.stopVideo) player.stopVideo();');
   }
 }
+
