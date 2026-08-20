@@ -136,11 +136,12 @@ class MainActivity: AudioServiceActivity() {
                                 // Sort by average bitrate or format (prefer m4a)
                                 val bestStream = audioStreams.maxByOrNull { it.averageBitrate } ?: audioStreams[0]
                                 val streamUrl = bestStream.content
+                                val formatName = bestStream.getFormat()?.getName() ?: "m4a"
                                 withContext(Dispatchers.Main) {
                                     result.success(mapOf(
                                         "url" to streamUrl,
                                         "bitrate" to bestStream.averageBitrate,
-                                        "format" to bestStream.getFormat().getName()
+                                        "format" to formatName
                                     ))
                                 }
                             } else {
