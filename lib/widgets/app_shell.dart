@@ -7,6 +7,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../providers/player_provider.dart';
 import '../services/player_service.dart';
 import '../theme/app_theme.dart';
+import 'background_youtube_player.dart';
 
 class AppShell extends ConsumerWidget {
   final StatefulNavigationShell navigationShell;
@@ -22,6 +23,12 @@ class AppShell extends ConsumerWidget {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
+          // Background YouTube Audio Engine (Never paused by Activity lifecycle)
+          const Align(
+            alignment: Alignment.topLeft,
+            child: BackgroundYoutubePlayer(),
+          ),
+
           navigationShell,
 
           // Mini Player overlay above content (Dismissible with horizontal swipe)
