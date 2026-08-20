@@ -40,14 +40,14 @@ class _AppShellState extends ConsumerState<AppShell> {
       backgroundColor: AppTheme.background,
       body: Stack(
         children: [
-          // Background YouTube Audio Engine (100% immune to 403 & background pauses)
+          // Background YouTube Audio Engine (Completely non-blocking offscreen)
           Positioned(
-            left: 0,
-            top: 0,
-            width: 10,
-            height: 10,
-            child: Opacity(
-              opacity: 0.01,
+            left: -500,
+            top: -500,
+            width: 1,
+            height: 1,
+            child: IgnorePointer(
+              ignoring: true,
               child: InAppWebView(
                 initialSettings: InAppWebViewSettings(
                   userAgent: 'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
