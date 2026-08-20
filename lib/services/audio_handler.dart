@@ -1,6 +1,5 @@
 ﻿// lib/services/audio_handler.dart
 import 'dart:async';
-import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
@@ -19,6 +18,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ),
   );
 
+  static const String _ua = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
   final YoutubeExplode _yt = YoutubeExplode();
 
   BackgroundAudioHandler() {
@@ -114,11 +114,21 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
       await _player.stop();
       debugPrint('[AudioHandler] Extracting stream via youtube_explode for $videoId');
       final manifest = await _yt.videos.streamsClient.getManifest(videoId);
-      final audioStream = manifest.audioOnly.withHighestBitrate();
       
-      debugPrint('[AudioHandler] Setting ExoPlayer AudioSource.uri...');
+      // Prioritas itag 140 (MP4 AAC murni yang didukung 100% Android hardware codec)
+      final audioStream = manifest.audioOnly.firstWhere(
+        (s) => s.tag == 140,
+        orElse: () => manifest.audioOnly.withHighestBitrate(),
+      );
+      
+      debugPrint('[AudioHandler] Setting ExoPlayer AudioSource (itag: ${audioStream.tag}, container: ${audioStream.container.name})...');
       await _player.setAudioSource(
-        AudioSource.uri(audioStream.url),
+        AudioSource.uri(
+          audioStream.url,
+          headers: const {
+            'User-Agent': _ua,
+          },
+        ),
         preload: true,
       );
       await _player.play();
