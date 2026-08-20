@@ -1,9 +1,11 @@
 ﻿// lib/services/audio_handler.dart
 import 'dart:async';
+import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 /// BackgroundAudioHandler - provides native background audio service & system notification controls.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
@@ -17,6 +19,8 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ),
   );
 
+  final YoutubeExplode _yt = YoutubeExplode();
+
   BackgroundAudioHandler() {
     _init();
   }
@@ -27,7 +31,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
 
-    // Listen to ExoPlayer playback events (for offline tracks)
     _player.playerStateStream.listen((state) {
       final playing = state.playing;
       final proc = state.processingState;
@@ -104,6 +107,27 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
+  /// Play online song natively with ExoPlayer background stream via youtube_explode_dart
+  Future<void> playOnline(String videoId, MediaItem item) async {
+    mediaItem.add(item);
+    try {
+      await _player.stop();
+      debugPrint('[AudioHandler] Extracting stream via youtube_explode for $videoId');
+      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
+      final audioStream = manifest.audioOnly.withHighestBitrate();
+      
+      debugPrint('[AudioHandler] Setting ExoPlayer AudioSource.uri...');
+      await _player.setAudioSource(
+        AudioSource.uri(audioStream.url),
+        preload: true,
+      );
+      await _player.play();
+    } catch (e) {
+      debugPrint('[AudioHandler] playOnline error: $e');
+      rethrow;
+    }
+  }
+
   /// Play offline local file
   Future<void> playFile(String path, MediaItem item) async {
     mediaItem.add(item);
@@ -158,6 +182,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> customAction(String name, [Map<String, dynamic>? extras]) async {
     if (name == 'dispose') {
+      _yt.close();
       await _player.dispose();
       await super.stop();
     }
