@@ -9,9 +9,6 @@ import 'package:just_audio/just_audio.dart';
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
 
-  static const String youtubeUserAgent =
-      'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
-
   BackgroundAudioHandler() {
     _init();
   }
@@ -66,18 +63,13 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
-  /// Play YouTube audio stream URL directly with ExoPlayer
+  /// Play stream URL directly with ExoPlayer (points to local proxy or direct stream)
   Future<void> playStreamUrl(String url, MediaItem item) async {
     mediaItem.add(item);
     try {
       await _player.stop();
       await _player.setAudioSource(
-        AudioSource.uri(
-          Uri.parse(url),
-          headers: {
-            'User-Agent': youtubeUserAgent,
-          },
-        ),
+        AudioSource.uri(Uri.parse(url)),
         preload: true,
       );
       await _player.play();

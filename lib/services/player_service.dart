@@ -1,11 +1,9 @@
 ﻿// lib/services/player_service.dart
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 
@@ -13,6 +11,7 @@ import '../models/video_item.dart';
 import '../models/play_history.dart';
 import 'audio_handler.dart';
 import 'db_service.dart';
+import 'stream_proxy_server.dart';
 
 export 'package:just_audio/just_audio.dart' show AudioPlayer, ProcessingState;
 
@@ -60,6 +59,9 @@ class PlayerService extends ChangeNotifier {
   // ─── Init ──────────────────────────────────
   void init(BackgroundAudioHandler handler) {
     _audioHandler = handler;
+
+    // Start local stream proxy server
+    StreamProxyServer().start();
 
     // Listen to playback state from audio_service
     handler.playbackState.listen((state) {
@@ -338,64 +340,6 @@ class PlayerService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ─── Innertube Stream Resolver ─────────────
-
-  Future<String?> _resolveInnertubeStreamUrl(String videoId) async {
-    const ua = BackgroundAudioHandler.youtubeUserAgent;
-    final httpClient = http.Client();
-    try {
-      final resp = await httpClient.post(
-        Uri.parse('https://www.youtube.com/youtubei/v1/player'),
-        headers: {
-          'User-Agent': ua,
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({
-          'context': {
-            'client': {
-              'clientName': 'ANDROID',
-              'clientVersion': '20.10.38',
-              'androidSdkVersion': 30,
-              'userAgent': ua,
-              'hl': 'en',
-              'gl': 'US',
-            }
-          },
-          'videoId': videoId,
-        }),
-      ).timeout(const Duration(seconds: 10));
-
-      if (resp.statusCode == 200) {
-        final data = json.decode(resp.body) as Map<String, dynamic>;
-        final formats = (data['streamingData']?['adaptiveFormats'] as List?) ?? [];
-        final audioStreams = formats.where((f) {
-          final mime = f['mimeType'] as String? ?? '';
-          return mime.startsWith('audio/') && f['url'] != null;
-        }).toList();
-
-        if (audioStreams.isNotEmpty) {
-          audioStreams.sort((a, b) {
-            final a140 = (a['itag'] == 140) ? 1 : 0;
-            final b140 = (b['itag'] == 140) ? 1 : 0;
-            if (a140 != b140) return b140.compareTo(a140);
-            return ((b['bitrate'] as int?) ?? 0).compareTo((a['bitrate'] as int?) ?? 0);
-          });
-
-          final chosen = audioStreams.first;
-          final rawUrl = chosen['url'] as String;
-          return rawUrl.contains('?')
-              ? '$rawUrl&rn=1&rbuf=0&ratebypass=yes'
-              : '$rawUrl?rn=1&rbuf=0&ratebypass=yes';
-        }
-      }
-    } catch (e) {
-      debugPrint('[Player] Innertube stream resolution error: $e');
-    } finally {
-      httpClient.close();
-    }
-    return null;
-  }
-
   // ─── Private ───────────────────────────────
 
   Future<void> _loadAndPlayAudio(VideoItem video) async {
@@ -424,21 +368,13 @@ class PlayerService extends ChangeNotifier {
         return;
       }
 
-      // 2. Stream online via Innertube + ExoPlayer
+      // 2. Stream online via Local Proxy + ExoPlayer
       if (_loadId != currentLoadId) return;
       _isPlayingOffline = false;
 
-      debugPrint('[Player] Resolving Innertube stream for: ${video.title}');
-      final streamUrl = await _resolveInnertubeStreamUrl(video.videoId);
-
-      if (streamUrl == null) {
-        throw Exception('Gagal mendapatkan stream audio untuk video ini');
-      }
-
-      if (_loadId != currentLoadId) return;
-
-      debugPrint('[Player] Playing online stream via ExoPlayer');
-      await _audioHandler!.playStreamUrl(streamUrl, mediaItem);
+      final proxyUrl = StreamProxyServer().getStreamUrl(video.videoId);
+      debugPrint('[Player] Playing online stream via Local Proxy: $proxyUrl');
+      await _audioHandler!.playStreamUrl(proxyUrl, mediaItem);
       _isPlaying = true;
     } catch (e) {
       debugPrint('[Player] AudioLoad error: $e');
@@ -497,6 +433,7 @@ class PlayerService extends ChangeNotifier {
 
   @override
   void dispose() {
+    StreamProxyServer().dispose();
     _positionController.close();
     _durationController.close();
     super.dispose();
