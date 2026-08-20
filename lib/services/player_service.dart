@@ -38,6 +38,7 @@ class PlayerService extends ChangeNotifier {
   String? _currentPlaylistId;
   bool _isLoadingAudio = false;
   bool _isPlayingOffline = false;
+  bool _hasPlayedCurrentSong = false;
 
   Duration _currentPosition = Duration.zero;
   Duration? _currentDuration;
@@ -77,6 +78,10 @@ class PlayerService extends ChangeNotifier {
     _currentPosition = value.position;
     _positionController.add(_currentPosition);
 
+    if (_currentPosition.inSeconds >= 4) {
+      _hasPlayedCurrentSong = true;
+    }
+
     if (value.metaData.duration > Duration.zero) {
       _currentDuration = value.metaData.duration;
       _durationController.add(_currentDuration);
@@ -90,16 +95,19 @@ class PlayerService extends ChangeNotifier {
     final playing = value.isPlaying;
     if (_isPlaying != playing) {
       _isPlaying = playing;
-      _audioHandler?.playbackState.add(
-        _audioHandler!.playbackState.value.copyWith(
-          playing: playing,
-          processingState: AudioProcessingState.ready,
-        ),
-      );
+      if (playing) {
+        final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
+        if (item != null) _audioHandler?.startBackgroundKeepAlive(item);
+      } else {
+        _audioHandler?.pauseBackgroundKeepAlive();
+      }
       notifyListeners();
     }
 
-    if (value.playerState == PlayerState.ended) {
+    // Auto next track ONLY when ended AND the song has actually played (anti false-skip)
+    if (value.playerState == PlayerState.ended && _hasPlayedCurrentSong) {
+      debugPrint('[Player] 🎵 Track ended naturally, transitioning to next...');
+      _hasPlayedCurrentSong = false;
       playNext();
     }
   }
@@ -123,6 +131,9 @@ class PlayerService extends ChangeNotifier {
       if (_isPlayingOffline) {
         _currentPosition = pos;
         _positionController.add(pos);
+        if (pos.inSeconds >= 4) {
+          _hasPlayedCurrentSong = true;
+        }
       }
     });
 
@@ -133,11 +144,25 @@ class PlayerService extends ChangeNotifier {
       }
     });
 
+    handler.player.playerStateStream.listen((state) {
+      if (_isPlayingOffline && state.processingState == ProcessingState.completed && _hasPlayedCurrentSong) {
+        _hasPlayedCurrentSong = false;
+        playNext();
+      }
+    });
+
     handler.customEvent.listen((event) {
       if (event == 'skipToNext') {
         playNext();
       } else if (event == 'skipToPrevious') {
         playPrevious();
+      } else if (event == 'play') {
+        if (!_isPlaying) togglePlay();
+      } else if (event == 'pause') {
+        if (_isPlaying) togglePlay();
+      } else if (event is Map && event['action'] == 'seek') {
+        final ms = event['position'] as int?;
+        if (ms != null) seek(Duration(milliseconds: ms));
       }
     });
   }
@@ -151,7 +176,7 @@ class PlayerService extends ChangeNotifier {
   RepeatMode get repeatMode => _repeatMode;
   bool get audioFocusMode => _audioFocusMode;
   String? get currentPlaylistId => _currentPlaylistId;
-  bool get hasNext => _queue.isNotEmpty && (_currentIndex < _queue.length - 1 || _repeatMode == RepeatMode.all || _isShuffled);
+  bool get hasNext => _queue.isNotEmpty;
   bool get hasPrevious => _queue.isNotEmpty && (_currentIndex > 0 || _isShuffled);
   bool get isLoadingAudio => _isLoadingAudio;
   AudioPlayer? get audioPlayer => _audioHandler?.player;
@@ -195,7 +220,7 @@ class PlayerService extends ChangeNotifier {
     }
 
     _currentVideo = video;
-    _consecutiveSuggestFailures = 0;
+    _hasPlayedCurrentSong = false;
     notifyListeners();
     _saveToHistory(video);
     _loadAndPlayAudio(video);
@@ -205,6 +230,7 @@ class PlayerService extends ChangeNotifier {
     if (index < 0 || index >= _queue.length) return;
     _currentIndex = index;
     _currentVideo = _queue[index];
+    _hasPlayedCurrentSong = false;
     notifyListeners();
     _saveToHistory(_currentVideo!);
     _loadAndPlayAudio(_currentVideo!);
@@ -229,10 +255,10 @@ class PlayerService extends ChangeNotifier {
 
     if (_currentIndex < _queue.length - 1) {
       playAt(_currentIndex + 1);
-    } else if (_repeatMode == RepeatMode.all) {
-      playAt(0);
     } else {
-      _autoSuggestAndPlayNext();
+      // 🔁 Reached tail of album/playlist: ALWAYS loop back to head (index 0)
+      debugPrint('[Player] 🔁 Reached tail of playlist (${_queue.length} songs), looping back to head (index 0)');
+      playAt(0);
     }
   }
 
@@ -258,73 +284,12 @@ class PlayerService extends ChangeNotifier {
     }
   }
 
-  int _consecutiveSuggestFailures = 0;
-
-  Future<void> _autoSuggestAndPlayNext() async {
-    if (_currentVideo == null) return;
-    if (_consecutiveSuggestFailures >= 3) {
-      debugPrint('[Player] Terlalu banyak kegagalan auto-suggest, hentikan autoplay.');
-      _isPlaying = false;
-      notifyListeners();
-      return;
-    }
-
-    try {
-      _isLoadingAudio = true;
-      notifyListeners();
-
-      List<VideoItem> candidates = [];
-      try {
-        final aiSuggestion = await AiService().recommendNextSong(
-          _currentVideo!.title,
-          _currentVideo!.channelTitle,
-        );
-
-        if (aiSuggestion != null && aiSuggestion.isNotEmpty) {
-          final aiResults = await YoutubeService().searchVideos(aiSuggestion, maxResults: 5);
-          if (aiResults.isNotEmpty) {
-            candidates.addAll(aiResults);
-          }
-        }
-      } catch (e) {
-        debugPrint('[Player] AI Suggest error: $e');
-      }
-
-      if (candidates.isEmpty) {
-        final related = await YoutubeService().getRelatedVideos(_currentVideo!);
-        candidates.addAll(related);
-      }
-
-      final existingIds = _queue.map((v) => v.videoId).toSet();
-      final filtered = candidates.where((v) => !existingIds.contains(v.videoId)).toList();
-
-      if (filtered.isNotEmpty) {
-        final bestCandidate = filtered.first;
-        addToQueue(bestCandidate);
-        playAt(_queue.length - 1);
-        _consecutiveSuggestFailures = 0;
-      } else {
-        _isPlaying = false;
-        notifyListeners();
-      }
-    } catch (e) {
-      debugPrint('[Player] Gagal auto-queue lagu baru: $e');
-      _consecutiveSuggestFailures++;
-      _isPlaying = false;
-      notifyListeners();
-    } finally {
-      if (_isLoadingAudio) {
-        _isLoadingAudio = false;
-        notifyListeners();
-      }
-    }
-  }
-
   void stop() {
     _currentVideo = null;
     _currentIndex = -1;
     _isPlaying = false;
     _isPlayingOffline = false;
+    _hasPlayedCurrentSong = false;
     if (_ytController != null) {
       _ytController!.pause();
       _ytController!.cue('');
@@ -336,16 +301,22 @@ class PlayerService extends ChangeNotifier {
   void togglePlay() {
     if (_isPlayingOffline) {
       if (_isPlaying) {
-        _audioHandler?.pause();
+        _audioHandler?.player.pause();
+        _isPlaying = false;
       } else {
-        _audioHandler?.play();
+        _audioHandler?.player.play();
+        _isPlaying = true;
       }
+      notifyListeners();
     } else {
       if (_isPlaying) {
         youtubeController.pause();
+        _audioHandler?.pauseBackgroundKeepAlive();
         _isPlaying = false;
       } else {
         youtubeController.play();
+        final item = _currentVideo != null ? _buildMediaItem(_currentVideo!) : null;
+        if (item != null) _audioHandler?.startBackgroundKeepAlive(item);
         _isPlaying = true;
       }
       notifyListeners();
@@ -459,6 +430,7 @@ class PlayerService extends ChangeNotifier {
     final currentLoadId = _loadId;
 
     _isLoadingAudio = true;
+    _hasPlayedCurrentSong = false;
     notifyListeners();
 
     try {
@@ -478,7 +450,7 @@ class PlayerService extends ChangeNotifier {
           await _audioHandler!.loadUrl(downloaded.localPath, mediaItem);
           if (_loadId != currentLoadId) return;
 
-          _audioHandler!.play();
+          _audioHandler!.player.play();
           _isPlayingOffline = true;
           playedOffline = true;
           _isPlaying = true;
@@ -491,16 +463,11 @@ class PlayerService extends ChangeNotifier {
       if (!playedOffline) {
         if (_loadId != currentLoadId) return;
         _isPlayingOffline = false;
-        await _audioHandler!.player.stop();
 
         final mediaItem = _buildMediaItem(video);
-        _audioHandler!.mediaItem.add(mediaItem);
-        _audioHandler!.playbackState.add(
-          _audioHandler!.playbackState.value.copyWith(
-            processingState: AudioProcessingState.ready,
-            playing: true,
-          ),
-        );
+        
+        // Start Android Foreground Service keep-alive so background playback NEVER stops
+        await _audioHandler!.startBackgroundKeepAlive(mediaItem);
 
         debugPrint('[Player] 🚀 Loading YouTube Video via Official Player: ${video.title} (${video.videoId})');
         youtubeController.load(video.videoId);
