@@ -9,13 +9,76 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.ryanheise.audioservice.AudioServiceActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.schabi.newpipe.extractor.NewPipe
+import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.downloader.Downloader
+import org.schabi.newpipe.extractor.downloader.Request as NewPipeRequest
+import org.schabi.newpipe.extractor.downloader.Response as NewPipeResponse
+import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor
+import java.io.IOException
 
 class MainActivity: AudioServiceActivity() {
-    private val CHANNEL = "com.submarine/battery"
+    private val BATTERY_CHANNEL = "com.submarine/battery"
+    private val EXTRACTOR_CHANNEL = "com.submarine/extractor"
+    private var isNewPipeInitialized = false
+
+    private fun initNewPipe() {
+        if (isNewPipeInitialized) return
+        try {
+            val okHttpClient = OkHttpClient.Builder().build()
+            val customDownloader = object : Downloader() {
+                @Throws(IOException::class)
+                override fun execute(request: NewPipeRequest): NewPipeResponse {
+                    val builder = Request.Builder().url(request.url())
+                    
+                    // Add headers
+                    for ((key, value) in request.headers()) {
+                        builder.addHeader(key, value.joinToString(","))
+                    }
+                    
+                    if (request.httpMethod().equals("POST", ignoreCase = true)) {
+                        val body = request.dataToSend() ?: ByteArray(0)
+                        builder.post(body.toRequestBody(null))
+                    } else {
+                        builder.get()
+                    }
+                    
+                    val response = okHttpClient.newCall(builder.build()).execute()
+                    val responseBody = response.body?.string() ?: ""
+                    val responseHeaders = mutableMapOf<String, List<String>>()
+                    for (name in response.headers.names()) {
+                        responseHeaders[name] = response.headers(name)
+                    }
+                    
+                    return NewPipeResponse(
+                        response.code,
+                        response.message,
+                        responseHeaders,
+                        responseBody,
+                        response.request.url.toString()
+                    )
+                }
+            }
+            NewPipe.init(customDownloader)
+            isNewPipeInitialized = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        initNewPipe()
+
+        // Battery Optimization Channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BATTERY_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "requestBatteryExemption" -> {
                     try {
@@ -26,13 +89,9 @@ class MainActivity: AudioServiceActivity() {
                                     data = Uri.parse("package:$packageName")
                                 }
                                 startActivity(intent)
-                                result.success(true)
-                            } else {
-                                result.success(true)
                             }
-                        } else {
-                            result.success(true)
                         }
+                        result.success(true)
                     } catch (e: Exception) {
                         try {
                             val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
@@ -49,6 +108,51 @@ class MainActivity: AudioServiceActivity() {
                         result.success(!powerManager.isIgnoringBatteryOptimizations(packageName))
                     } else {
                         result.success(false)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // NewPipeExtractor Stream Channel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, EXTRACTOR_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getAudioStreamUrl" -> {
+                    val videoId = call.argument<String>("videoId")
+                    if (videoId.isNullOrEmpty()) {
+                        result.error("INVALID_ID", "Video ID is null or empty", null)
+                        return@setMethodCallHandler
+                    }
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            initNewPipe()
+                            val url = "https://www.youtube.com/watch?v=$videoId"
+                            val extractor = ServiceList.YouTube.getStreamExtractor(url) as YoutubeStreamExtractor
+                            extractor.fetchPage()
+                            
+                            val audioStreams = extractor.audioStreams
+                            if (audioStreams.isNotEmpty()) {
+                                // Sort by average bitrate or format (prefer m4a)
+                                val bestStream = audioStreams.maxByOrNull { it.averageBitrate } ?: audioStreams[0]
+                                val streamUrl = bestStream.content
+                                withContext(Dispatchers.Main) {
+                                    result.success(mapOf(
+                                        "url" to streamUrl,
+                                        "bitrate" to bestStream.averageBitrate,
+                                        "format" to bestStream.getFormat().getName()
+                                    ))
+                                }
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    result.error("NO_STREAMS", "No audio streams found", null)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                result.error("EXTRACT_ERROR", e.message, null)
+                            }
+                        }
                     }
                 }
                 else -> result.notImplemented()

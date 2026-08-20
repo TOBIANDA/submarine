@@ -4,11 +4,10 @@ import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-/// BackgroundAudioHandler - provides native background audio service & system notification controls.
+/// BackgroundAudioHandler - provides native background audio service & system notification controls via NewPipeExtractor
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer(
     audioLoadConfiguration: const AudioLoadConfiguration(
@@ -20,10 +19,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ),
   );
 
-  static const String _ua = 'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
-  final YoutubeExplode _yt = YoutubeExplode();
-  HttpServer? _proxyServer;
-  int _proxyPort = 0;
+  static const _extractorChannel = MethodChannel('com.submarine/extractor');
 
   BackgroundAudioHandler() {
     _init();
@@ -34,9 +30,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> _init() async {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
-
-    // Start fast local loopback audio proxy
-    await _startProxyServer();
 
     _player.playerStateStream.listen((state) {
       final playing = state.playing;
@@ -87,65 +80,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
-  Future<void> _startProxyServer() async {
-    if (_proxyServer != null) return;
-    try {
-      _proxyServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      _proxyPort = _proxyServer!.port;
-      debugPrint('[AudioHandler] Fast local audio proxy listening on port $_proxyPort');
-
-      _proxyServer!.listen((HttpRequest request) async {
-        final targetUrl = request.uri.queryParameters['url'];
-        if (targetUrl == null || targetUrl.isEmpty) {
-          request.response.statusCode = HttpStatus.badRequest;
-          await request.response.close();
-          return;
-        }
-
-        http.Client? upstreamClient;
-        try {
-          upstreamClient = http.Client();
-          final req = http.Request('GET', Uri.parse(targetUrl));
-          req.headers['User-Agent'] = _ua;
-          
-          final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
-          if (rangeHeader != null) {
-            req.headers['Range'] = rangeHeader;
-          }
-
-          final upstream = await upstreamClient.send(req);
-
-          request.response.statusCode = upstream.statusCode;
-          request.response.headers.contentType = ContentType('audio', 'mp4');
-          if (upstream.contentLength != null) {
-            request.response.contentLength = upstream.contentLength!;
-          }
-
-          final acceptRanges = upstream.headers['accept-ranges'];
-          if (acceptRanges != null) {
-            request.response.headers.set('accept-ranges', acceptRanges);
-          }
-          final contentRange = upstream.headers['content-range'];
-          if (contentRange != null) {
-            request.response.headers.set('content-range', contentRange);
-          }
-
-          await request.response.addStream(upstream.stream);
-          await request.response.close();
-        } catch (e) {
-          try {
-            request.response.statusCode = HttpStatus.internalServerError;
-            await request.response.close();
-          } catch (_) {}
-        } finally {
-          upstreamClient?.close();
-        }
-      });
-    } catch (e) {
-      debugPrint('[AudioHandler] Proxy server bind error: $e');
-    }
-  }
-
   /// Update system notification with current song details and playing state
   Future<void> updateNotification(MediaItem item, {required bool isPlaying}) async {
     mediaItem.add(item);
@@ -173,28 +107,33 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
-  /// Play online song natively with ExoPlayer via pre-resolved fast loopback proxy
+  /// Play online song natively with ExoPlayer using NewPipeExtractor signed stream URL
   Future<void> playOnline(String videoId, MediaItem item) async {
     mediaItem.add(item);
     try {
       await _player.stop();
-      if (_proxyPort == 0) {
-        await _startProxyServer();
+      debugPrint('[AudioHandler] Calling native NewPipeExtractor for $videoId...');
+      
+      final result = await _extractorChannel.invokeMethod<Map>('getAudioStreamUrl', {
+        'videoId': videoId,
+      });
+
+      if (result == null || result['url'] == null) {
+        throw Exception('Failed to extract stream URL from NewPipeExtractor');
       }
 
-      debugPrint('[AudioHandler] Resolving YouTube stream for $videoId...');
-      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
-      final audioStream = manifest.audioOnly.firstWhere(
-        (s) => s.tag == 140,
-        orElse: () => manifest.audioOnly.withHighestBitrate(),
-      );
-      final rawStreamUrl = audioStream.url.toString();
+      final streamUrl = result['url'] as String;
+      final bitrate = result['bitrate'];
+      final format = result['format'];
+      debugPrint('[AudioHandler] NewPipe stream acquired: $format ($bitrate bps)');
 
-      final proxyUri = Uri.parse('http://127.0.0.1:$_proxyPort/stream?url=${Uri.encodeComponent(rawStreamUrl)}');
-      debugPrint('[AudioHandler] Starting ExoPlayer on pre-resolved proxy stream: $proxyUri');
-      
       await _player.setAudioSource(
-        AudioSource.uri(proxyUri),
+        AudioSource.uri(
+          Uri.parse(streamUrl),
+          headers: const {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        ),
         preload: true,
       );
       await _player.play();
@@ -258,8 +197,6 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> customAction(String name, [Map<String, dynamic>? extras]) async {
     if (name == 'dispose') {
-      _proxyServer?.close(force: true);
-      _yt.close();
       await _player.dispose();
       await super.stop();
     }
