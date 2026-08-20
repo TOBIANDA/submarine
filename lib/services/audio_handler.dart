@@ -5,76 +5,135 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
-/// BackgroundAudioHandler - bridges audio_service and Android media notification.
+/// BackgroundAudioHandler - drives native ExoPlayer via audio_service Foreground Service.
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
 
-  BackgroundAudioHandler() {
-    _initAudioSession();
-  }
+  static const String youtubeUserAgent =
+      'com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip';
 
-  Future<void> _initAudioSession() async {
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
+  BackgroundAudioHandler() {
+    _init();
   }
 
   AudioPlayer get player => _player;
 
-  /// Updates media notification and media session without competing for Audio Focus
-  Future<void> updateNotification(MediaItem item, {required bool isPlaying}) async {
+  Future<void> _init() async {
+    final session = await AudioSession.instance;
+    await session.configure(const AudioSessionConfiguration.music());
+
+    _player.playerStateStream.listen((state) {
+      final playing = state.playing;
+      final proc = state.processingState;
+
+      final audioProc = switch (proc) {
+        ProcessingState.idle      => AudioProcessingState.idle,
+        ProcessingState.loading   => AudioProcessingState.loading,
+        ProcessingState.buffering => AudioProcessingState.buffering,
+        ProcessingState.ready     => AudioProcessingState.ready,
+        ProcessingState.completed => AudioProcessingState.completed,
+      };
+
+      playbackState.add(playbackState.value.copyWith(
+        processingState: audioProc,
+        playing: playing,
+        updatePosition: _player.position,
+        bufferedPosition: _player.bufferedPosition,
+        speed: _player.speed,
+        controls: [
+          MediaControl.skipToPrevious,
+          playing ? MediaControl.pause : MediaControl.play,
+          MediaControl.skipToNext,
+          MediaControl.stop,
+        ],
+        systemActions: const {
+          MediaAction.seek,
+          MediaAction.seekForward,
+          MediaAction.seekBackward,
+          MediaAction.play,
+          MediaAction.pause,
+          MediaAction.playPause,
+          MediaAction.skipToNext,
+          MediaAction.skipToPrevious,
+          MediaAction.stop,
+        },
+        androidCompactActionIndices: const [0, 1, 2],
+      ));
+    });
+
+    _player.positionStream.listen((pos) {
+      playbackState.add(playbackState.value.copyWith(updatePosition: pos));
+    });
+  }
+
+  /// Play YouTube audio stream URL directly with ExoPlayer
+  Future<void> playStreamUrl(String url, MediaItem item) async {
     mediaItem.add(item);
-    playbackState.add(playbackState.value.copyWith(
-      processingState: AudioProcessingState.ready,
-      playing: isPlaying,
-      controls: [
-        MediaControl.skipToPrevious,
-        isPlaying ? MediaControl.pause : MediaControl.play,
-        MediaControl.skipToNext,
-        MediaControl.stop,
-      ],
-      systemActions: const {
-        MediaAction.seek, MediaAction.seekForward, MediaAction.seekBackward,
-        MediaAction.play, MediaAction.pause, MediaAction.playPause,
-        MediaAction.skipToNext, MediaAction.skipToPrevious, MediaAction.stop,
-      },
-      androidCompactActionIndices: const [0, 1, 2],
-    ));
+    try {
+      await _player.stop();
+      await _player.setAudioSource(
+        AudioSource.uri(
+          Uri.parse(url),
+          headers: {
+            'User-Agent': youtubeUserAgent,
+          },
+        ),
+        preload: true,
+      );
+      await _player.play();
+      debugPrint('[AudioHandler] Playing native ExoPlayer stream: ${item.title}');
+    } catch (e) {
+      debugPrint('[AudioHandler] playStreamUrl error: $e');
+      rethrow;
+    }
   }
 
-  /// Load audio from offline local file
-  Future<void> loadUrl(String filePath, MediaItem item) async {
+  /// Play offline local file
+  Future<void> playFile(String path, MediaItem item) async {
     mediaItem.add(item);
-    final source = AudioSource.uri(Uri.file(filePath));
-    await _player.setAudioSource(source, preload: true);
+    try {
+      await _player.stop();
+      await _player.setAudioSource(
+        AudioSource.uri(Uri.file(path)),
+        preload: true,
+      );
+      await _player.play();
+      debugPrint('[AudioHandler] Playing offline file: ${item.title}');
+    } catch (e) {
+      debugPrint('[AudioHandler] playFile error: $e');
+      rethrow;
+    }
   }
 
   @override
-  Future<void> play() async {
-    customEvent.add('play');
+  Future<void> updateMediaItem(MediaItem item) async {
+    mediaItem.add(item);
   }
 
   @override
-  Future<void> pause() async {
-    customEvent.add('pause');
-  }
+  Future<void> play() async => _player.play();
 
   @override
-  Future<void> seek(Duration position) async {
-    customEvent.add({'action': 'seek', 'position': position.inMilliseconds});
-  }
+  Future<void> pause() async => _player.pause();
+
+  @override
+  Future<void> seek(Duration position) async => _player.seek(position);
 
   @override
   Future<void> stop() async {
+    await _player.stop();
     playbackState.add(playbackState.value.copyWith(
       processingState: AudioProcessingState.idle,
       playing: false,
     ));
-    await _player.stop();
     await super.stop();
   }
 
-  @override Future<void> skipToNext() async => customEvent.add('skipToNext');
-  @override Future<void> skipToPrevious() async => customEvent.add('skipToPrevious');
+  @override
+  Future<void> skipToNext() async => customEvent.add('skipToNext');
+
+  @override
+  Future<void> skipToPrevious() async => customEvent.add('skipToPrevious');
 
   @override
   Future<void> customAction(String name, [Map<String, dynamic>? extras]) async {
