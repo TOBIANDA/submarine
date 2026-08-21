@@ -40,7 +40,7 @@ class _AppShellState extends ConsumerState<AppShell> {
         children: [
           widget.navigationShell,
 
-          // Mini Player overlay above content (Dismissible with horizontal swipe)
+          // Mini Player overlay above content (Dismissible with horizontal swipe or close button)
           if (currentVideo != null)
             Align(
               alignment: Alignment.bottomCenter,
@@ -54,7 +54,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 }
 
 // ─────────────────────────────────────────────
-// Music Mini Player (Spotify Style with Swipe-to-Dismiss)
+// Music Mini Player (Spotify Style with Swipe-to-Dismiss & Close Button)
 // ─────────────────────────────────────────────
 class _MusicMiniPlayer extends StatelessWidget {
   final PlayerService player;
@@ -76,7 +76,7 @@ class _MusicMiniPlayer extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.red.withOpacity(0.3),
+          color: Colors.red.withValues(alpha: 0.3),
           borderRadius: BorderRadius.circular(14),
         ),
         alignment: Alignment.centerLeft,
@@ -92,7 +92,7 @@ class _MusicMiniPlayer extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         padding: const EdgeInsets.symmetric(horizontal: 20),
         decoration: BoxDecoration(
-          color: Colors.red.withOpacity(0.3),
+          color: Colors.red.withValues(alpha: 0.3),
           borderRadius: BorderRadius.circular(14),
         ),
         alignment: Alignment.centerRight,
@@ -111,15 +111,15 @@ class _MusicMiniPlayer extends StatelessWidget {
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E1E2E).withOpacity(0.95),
+            color: const Color(0xFF1E1E2E).withValues(alpha: 0.96),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: AppTheme.primary.withOpacity(0.2),
+              color: AppTheme.primary.withValues(alpha: 0.25),
               width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.4),
+                color: Colors.black.withValues(alpha: 0.45),
                 blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
@@ -168,7 +168,7 @@ class _MusicMiniPlayer extends StatelessWidget {
                         Text(
                           video.channelTitle,
                           style: TextStyle(
-                            color: Colors.white.withOpacity(0.6),
+                            color: Colors.white.withValues(alpha: 0.6),
                             fontSize: 11,
                           ),
                           maxLines: 1,
@@ -183,20 +183,20 @@ class _MusicMiniPlayer extends StatelessWidget {
                     icon: Icon(
                       Icons.skip_previous_rounded,
                       color: player.hasPrevious ? Colors.white : Colors.white24,
-                      size: 24,
+                      size: 22,
                     ),
                     onPressed: player.hasPrevious ? player.playPrevious : null,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                   ),
 
                   // Play / Pause Button
                   if (player.isLoadingAudio && !player.isPlaying)
                     const SizedBox(
-                      width: 32,
-                      height: 32,
+                      width: 28,
+                      height: 28,
                       child: Padding(
-                        padding: EdgeInsets.all(6),
+                        padding: EdgeInsets.all(4),
                         child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
                       ),
                     )
@@ -219,10 +219,24 @@ class _MusicMiniPlayer extends StatelessWidget {
                     icon: Icon(
                       Icons.skip_next_rounded,
                       color: player.hasNext ? Colors.white : Colors.white24,
+                      size: 22,
                     ),
                     onPressed: player.hasNext ? player.playNext : null,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  ),
+
+                  // Close Button (Tutup Pemutar)
+                  IconButton(
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white54,
+                      size: 20,
+                    ),
+                    onPressed: () => player.stop(),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                    tooltip: 'Tutup pemutar',
                   ),
                 ],
               ),
@@ -242,7 +256,7 @@ class _MusicMiniPlayer extends StatelessWidget {
                     borderRadius: BorderRadius.circular(2),
                     child: LinearProgressIndicator(
                       value: progress,
-                      backgroundColor: Colors.white.withOpacity(0.1),
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
                       valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primary),
                       minHeight: 2,
                     ),
@@ -274,7 +288,7 @@ class _BottomNavBar extends StatelessWidget {
         initialLocation: index == navigationShell.currentIndex,
       ),
       backgroundColor: AppTheme.surface,
-      indicatorColor: AppTheme.primary.withOpacity(0.15),
+      indicatorColor: AppTheme.primary.withValues(alpha: 0.15),
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.home_outlined),

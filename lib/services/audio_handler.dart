@@ -1,6 +1,5 @@
 ﻿// lib/services/audio_handler.dart
 import 'dart:async';
-import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
@@ -148,12 +147,13 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     mediaItem.add(item);
     try {
       await _player.stop();
+      debugPrint('[AudioHandler] Setting file source: $path');
       await _player.setAudioSource(
-        AudioSource.uri(Uri.file(path)),
+        AudioSource.file(path),
         preload: true,
       );
       await _player.play();
-      debugPrint('[AudioHandler] Playing offline file: ${item.title}');
+      debugPrint('[AudioHandler] Playing offline file successfully: ${item.title}');
     } catch (e) {
       debugPrint('[AudioHandler] playFile error: $e');
       rethrow;
@@ -185,6 +185,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
       processingState: AudioProcessingState.idle,
       playing: false,
     ));
+    customEvent.add('stop');
     await super.stop();
   }
 

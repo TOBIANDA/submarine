@@ -55,7 +55,10 @@ class PlayerService extends ChangeNotifier {
   Future<void> init(BackgroundAudioHandler handler) async {
     _audioHandler = handler;
 
-    audioPlayer.playerStateStream.listen((state) { if (state.playing) { _isLoadingAudio = false; }
+    audioPlayer.playerStateStream.listen((state) {
+      if (state.playing) {
+        _isLoadingAudio = false;
+      }
       notifyListeners();
     });
 
@@ -77,6 +80,12 @@ class PlayerService extends ChangeNotifier {
       if (event == 'skipToPrevious') playPrevious();
       if (event == 'play') play();
       if (event == 'pause') pause();
+      if (event == 'stop') {
+        _playlist.clear();
+        _currentIndex = -1;
+        _isLoadingAudio = false;
+        notifyListeners();
+      }
     });
   }
 
@@ -166,12 +175,34 @@ class PlayerService extends ChangeNotifier {
 
   Future<String?> _getOfflineFilePath(String videoId) async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final mp3 = File('${dir.path}/downloads/$videoId.mp3');
-      if (await mp3.exists()) return mp3.path;
-      final m4a = File('${dir.path}/downloads/$videoId.m4a');
-      if (await m4a.exists()) return m4a.path;
-    } catch (_) {}
+      // 1. Check in SQLite database records
+      final downloaded = await DbService().getDownload(videoId);
+      if (downloaded != null && await File(downloaded.localPath).exists()) {
+        return downloaded.localPath;
+      }
+
+      // 2. Fallback check in App Documents Directory
+      final appDir = await getApplicationDocumentsDirectory();
+      for (final ext in ['webm', 'm4a', 'opus', 'mp3', 'mp4']) {
+        final f = File('${appDir.path}/downloads/$videoId.$ext');
+        if (await f.exists() && (await f.length()) > 10000) {
+          return f.path;
+        }
+      }
+
+      // 3. Fallback check in External Storage Directory
+      final extDir = await getExternalStorageDirectory();
+      if (extDir != null) {
+        for (final ext in ['webm', 'm4a', 'opus', 'mp3', 'mp4']) {
+          final f = File('${extDir.path}/downloads/$videoId.$ext');
+          if (await f.exists() && (await f.length()) > 10000) {
+            return f.path;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[Player] Error resolving offline file path: $e');
+    }
     return null;
   }
 
@@ -211,9 +242,12 @@ class PlayerService extends ChangeNotifier {
   }
 
   Future<void> stop() async {
-    await _audioHandler.stop();
+    try {
+      await _audioHandler.stop();
+    } catch (_) {}
     _playlist.clear();
     _currentIndex = -1;
+    _isLoadingAudio = false;
     notifyListeners();
   }
 
