@@ -1,4 +1,4 @@
-// lib/router.dart
+﻿// lib/router.dart
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,6 +9,7 @@ import 'screens/library/library_screen.dart';
 import 'screens/library/playlist_detail_screen.dart';
 import 'screens/library/ai_create_playlist_screen.dart';
 import 'screens/library/ai_edit_playlist_screen.dart';
+import 'screens/downloads/downloads_screen.dart';
 import 'screens/player/full_player_screen.dart';
 import 'screens/profile/profile_screen.dart';
 import 'screens/channel/channel_screen.dart';
@@ -20,26 +21,31 @@ final goRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/home',
   routes: [
-    // ── Full Player (modal, above shell) ─────────────────
+    // ── Full Player (modal, above shell) ─────────────────────────
     GoRoute(
       path: '/player',
       parentNavigatorKey: _rootNavigatorKey,
-      pageBuilder: (_, state) => CustomTransitionPage(
-        key: state.pageKey,
-        child: FullPlayerScreen(video: state.extra as VideoItem),
-        transitionsBuilder: (_, animation, __, child) => SlideTransition(
-          position: animation.drive(
-            Tween(
-              begin: const Offset(0, 1),
-              end: Offset.zero,
-            ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      pageBuilder: (_, state) {
+        final video = state.extra as VideoItem?;
+        return CustomTransitionPage(
+          key: state.pageKey,
+          child: video != null
+              ? FullPlayerScreen(video: video)
+              : const SizedBox.shrink(),
+          transitionsBuilder: (_, animation, __, child) => SlideTransition(
+            position: animation.drive(
+              Tween(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).chain(CurveTween(curve: Curves.easeOutCubic)),
+            ),
+            child: child,
           ),
-          child: child,
-        ),
-      ),
+        );
+      },
     ),
 
-    // ── Channel Detail Screen (above shell) ──────────────
+    // ── Channel Detail Screen (above shell) ─────────────────────
     GoRoute(
       path: '/channel/:id',
       parentNavigatorKey: _rootNavigatorKey,
@@ -53,11 +59,18 @@ final goRouter = GoRouter(
       },
     ),
 
-    // ── Shell (bottom nav + mini player) ─────────────────
+    // ── Standalone / Direct Downloads Route ─────────────────────
+    GoRoute(
+      path: '/downloads',
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (_, __) => const DownloadsScreen(),
+    ),
+
+    // ── Shell (bottom nav + mini player) ─────────────────────────
     StatefulShellRoute.indexedStack(
       builder: (_, __, shell) => AppShell(navigationShell: shell),
       branches: [
-        // ── Branch 0: Home ────────────────────────────────
+        // ── Branch 0: Home ─────────────────────────
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -67,7 +80,7 @@ final goRouter = GoRouter(
           ],
         ),
 
-        // ── Branch 1: Search ──────────────────────────────
+        // ── Branch 1: Search ───────────────────────
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -77,7 +90,7 @@ final goRouter = GoRouter(
           ],
         ),
 
-        // ── Branch 2: Library ─────────────────────────────
+        // ── Branch 2: Library ──────────────────────
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -110,12 +123,29 @@ final goRouter = GoRouter(
           ],
         ),
 
-        // ── Branch 3: Profile ─────────────────────────────
+        // ── Branch 3: Downloads (Bottom Nav Tab) ───
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/downloads_tab',
+              builder: (_, __) => const DownloadsScreen(),
+            ),
+          ],
+        ),
+
+        // ── Branch 4: Profile ──────────────────────
         StatefulShellBranch(
           routes: [
             GoRoute(
               path: '/profile',
               builder: (_, __) => const ProfileScreen(),
+              routes: [
+                GoRoute(
+                  path: 'downloads',
+                  parentNavigatorKey: _rootNavigatorKey,
+                  builder: (_, __) => const DownloadsScreen(),
+                ),
+              ],
             ),
           ],
         ),
