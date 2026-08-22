@@ -144,7 +144,7 @@ class ProfileScreen extends ConsumerWidget {
                       history: item,
                       onPlay: () {
                         final video = item.toVideoItem();
-                        ref.read(playerProvider.notifier).playSingle(video);
+                        PlayerService().playSingle(video);
                       },
                     );
                   },
