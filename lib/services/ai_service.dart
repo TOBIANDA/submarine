@@ -45,10 +45,12 @@ class AiService {
     final numSongs = count ?? songCount ?? 15;
     final userMsg = 'Buatkan playlist dengan tema/deskripsi berikut: "$prompt"\nJumlah lagu: $numSongs';
 
+    final calculatedTokens = (numSongs * 45).clamp(800, 2500);
+
     final rawJson = await _callGroq(
       system: AppConstants.curateSystemPrompt,
       userMessage: userMsg,
-      maxTokens: 2000,
+      maxTokens: calculatedTokens,
     );
 
     return _parseCurationResponse(rawJson);
