@@ -11,12 +11,12 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer(
     audioLoadConfiguration: const AudioLoadConfiguration(
       androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 20),
-        maxBufferDuration: Duration(seconds: 120),
+        minBufferDuration: Duration(seconds: 30),
+        maxBufferDuration: Duration(seconds: 600), // Buffer entire song (up to 10 mins) smoothly
         bufferForPlaybackDuration: Duration(milliseconds: 1000),
         bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 2000),
-        prioritizeTimeOverSizeThresholds: false,
-        backBufferDuration: Duration(seconds: 30),
+        prioritizeTimeOverSizeThresholds: true,
+        backBufferDuration: Duration(seconds: 60),
       ),
     ),
   );
@@ -109,7 +109,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
-  /// Play online song natively with ExoPlayer using NewPipeExtractor signed stream URL
+  /// Play online song natively with ExoPlayer using LockCachingAudioSource to prevent mid-song dropouts
   Future<void> playOnline(String videoId, MediaItem item) async {
     mediaItem.add(item);
     try {
@@ -129,12 +129,15 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
       final format = result['format'];
       debugPrint('[AudioHandler] NewPipe stream acquired: $format ($bitrate bps)');
 
+      // Use LockCachingAudioSource with full YouTube headers to download & cache the audio in background
       await _player.setAudioSource(
-        AudioSource.uri(
+        LockCachingAudioSource(
           Uri.parse(streamUrl),
           headers: const {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Encoding': 'identity',
+            'Referer': 'https://www.youtube.com/',
+            'Origin': 'https://www.youtube.com',
+            'Accept': '*/*',
             'Connection': 'keep-alive',
           },
         ),
