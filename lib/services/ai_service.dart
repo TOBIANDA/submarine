@@ -3,27 +3,23 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../core/app_constants.dart';
-import '../models/video_item.dart';
 
 class AiCurationResult {
   final String message;
   final List<String> queries;
-  final List<String> reasons;
 
-  AiCurationResult({required this.message, required this.queries, required this.reasons});
+  AiCurationResult({required this.message, required this.queries});
 }
 
 class AiEditResult {
   final String message;
   final List<int> keepIndices;
-  final List<String> newSongQueries;
-  final List<String> newSongReasons;
+  final List<String> newQueries;
 
   AiEditResult({
     required this.message,
     required this.keepIndices,
-    required this.newSongQueries,
-    required this.newSongReasons,
+    required this.newQueries,
   });
 }
 
@@ -32,247 +28,217 @@ class AiService {
   AiService._();
   factory AiService() => _instance ??= AiService._();
 
-  /// Ask Groq to generate search queries for a playlist description
-  Future<AiCurationResult> curatePlaylist(
-      String description, {int count = 10}) async {
-    final userMessage =
-        '$description\n\nGenerate exactly $count search queries.';
+  /// Curate a new playlist from user prompt
+  Future<AiCurationResult> curatePlaylist(String prompt, {int songCount = 15}) async {
+    final userMsg = 'Buatkan playlist dengan tema/deskripsi berikut: "$prompt"\nJumlah lagu: $songCount';
 
-    final response = await _callGroq(
+    final rawJson = await _callGroq(
       system: AppConstants.curateSystemPrompt,
-      userMessage: userMessage,
-      maxTokens: (count * 55 + 600).clamp(1200, 3600),
+      userMessage: userMsg,
+      maxTokens: 2000,
     );
 
-    final cleaned = _stripMarkdown(response);
-
-    try {
-      final jsonMap = jsonDecode(cleaned) as Map<String, dynamic>;
-      final message = jsonMap['message'] as String? ?? 'Berikut playlist pilihan saya:';
-      final jsonList = jsonMap['results'] as List<dynamic>? ?? [];
-      
-      final queries = <String>[];
-      final reasons = <String>[];
-      for (final item in jsonList) {
-        if (item is Map) {
-          final q = (item['query'] as String?)?.trim() ?? '';
-          if (q.isNotEmpty) {
-            queries.add(q);
-            reasons.add((item['reason'] as String?) ?? '');
-          }
-        }
-      }
-
-      if (queries.isNotEmpty) {
-        return AiCurationResult(message: message, queries: queries, reasons: reasons);
-      }
-    } catch (e) {
-      debugPrint('[AI] Standard JSON decode error, falling back to resilient regex recovery: $e');
-    }
-
-    // Resilient Regex recovery if JSON had slight formatting imperfection
-    final regexMatches = RegExp(r'["\x27]query["\x27]\s*:\s*["\x27]([^"\x27]+)["\x27]').allMatches(cleaned);
-    final fallbackQueries = regexMatches.map((m) => m.group(1)!.trim()).where((q) => q.isNotEmpty).toList();
-
-    if (fallbackQueries.isNotEmpty) {
-      return AiCurationResult(
-        message: 'Berikut lagu-lagu pilihan Anda:',
-        queries: fallbackQueries,
-        reasons: List.filled(fallbackQueries.length, ''),
-      );
-    }
-
-    throw Exception('Gagal memproses daftar lagu dari AI. Silakan coba lagi.');
+    return _parseCurationResponse(rawJson);
   }
 
-  /// Ask Groq to reorder a playlist based on user instruction
-  Future<List<int>> reorderPlaylist(
-      List<VideoItem> items, String instruction) async {
-    final itemList = items
-        .asMap()
-        .entries
-        .map((e) => '${e.key}: ${e.value.title} - ${e.value.channelTitle}')
-        .join('\n');
+  /// Reorder an existing playlist
+  Future<List<int>> reorderPlaylist({
+    required List<String> songTitles,
+    required String instruction,
+  }) async {
+    final titlesList = songTitles.asMap().entries.map((e) => '${e.key}: ${e.value}').join('\n');
+    final userMsg = 'Daftar lagu saat ini:\n$titlesList\n\nInstruksi pengurutan: "$instruction"';
 
-    final userMessage = '''
-Playlist items:
-$itemList
-
-Instruction: $instruction
-''';
-
-    final response = await _callGroq(
+    final rawJson = await _callGroq(
       system: AppConstants.reorderSystemPrompt,
-      userMessage: userMessage,
-      maxTokens: 1000,
+      userMessage: userMsg,
+      maxTokens: 500,
     );
 
-    final cleaned = _stripMarkdown(response);
-
-    try {
-      final jsonList = jsonDecode(cleaned) as List<dynamic>;
-      return jsonList.map((e) => e as int).toList();
-    } catch (e) {
-      final matches = RegExp(r'\d+').allMatches(cleaned);
-      final list = matches.map((m) => int.parse(m.group(0)!)).toList();
-      if (list.length == items.length) return list;
-      throw Exception('Failed to parse AI reorder response: $e');
-    }
+    return _parseReorderResponse(rawJson, songTitles.length);
   }
 
-  /// Meminta AI untuk mengedit playlist berdasarkan instruksi user.
-  Future<AiEditResult> editPlaylist(
-      List<VideoItem> items, String instruction) async {
-    final itemList = items
-        .asMap()
-        .entries
-        .map((e) => '${e.key}: ${e.value.title} - ${e.value.channelTitle}')
-        .join('\n');
+  /// Edit/modify an existing playlist
+  Future<AiEditResult> editPlaylist({
+    required List<String> currentSongs,
+    required String instruction,
+  }) async {
+    final songList = currentSongs.asMap().entries.map((e) => '[Index ${e.key}] ${e.value}').join('\n');
+    final userMsg = 'Playlist saat ini:\n$songList\n\nInstruksi edit: "$instruction"';
 
-    final userMessage = '''
-Current playlist (${items.length} songs):
-$itemList
-
-Instruction: $instruction
-''';
-
-    final response = await _callGroq(
+    final rawJson = await _callGroq(
       system: AppConstants.editSystemPrompt,
-      userMessage: userMessage,
+      userMessage: userMsg,
       maxTokens: 1500,
     );
 
-    final cleaned = _stripMarkdown(response);
-
-    try {
-      final jsonMap = jsonDecode(cleaned) as Map<String, dynamic>;
-      final message = jsonMap['message'] as String? ?? 'Playlist telah diperbarui!';
-      
-      final keepIndices = (jsonMap['keep_indices'] as List<dynamic>?)
-              ?.map((e) => e as int)
-              .toList() ??
-          List.generate(items.length, (i) => i);
-      
-      final newSongsRaw = jsonMap['new_songs'] as List<dynamic>? ?? [];
-      final newSongQueries = <String>[];
-      final newSongReasons = <String>[];
-      for (final item in newSongsRaw) {
-        if (item is Map) {
-          final q = (item['query'] as String?)?.trim() ?? '';
-          if (q.isNotEmpty) {
-            newSongQueries.add(q);
-            newSongReasons.add((item['reason'] as String?) ?? '');
-          }
-        }
-      }
-
-      return AiEditResult(
-        message: message,
-        keepIndices: keepIndices,
-        newSongQueries: newSongQueries,
-        newSongReasons: newSongReasons,
-      );
-    } catch (e) {
-      throw Exception('Failed to parse AI edit response: $e');
-    }
+    return _parseEditResponse(rawJson, currentSongs.length);
   }
 
-  /// Meminta Groq untuk menyarankan satu lagu berikutnya yang BERBEDA (Anti-Duplikat)
-  Future<String?> recommendNextSong(String currentTitle, String currentArtist) async {
-    final cleanTitle = currentTitle
-        .replaceAll(RegExp(r'\(.*?\)|\[.*?\]', caseSensitive: false), '')
-        .replaceAll(RegExp(r'official\s*(video|audio|lyrics|music video)?', caseSensitive: false), '')
-        .trim();
-
-    final system = '''You are an expert music curator. 
-The user just finished listening to "$cleanTitle" by "$currentArtist". 
-
-YOUR TASK:
-Recommend EXACTLY ONE SIMILAR song (by the same artist or by a related artist) that provides a great continuous listening experience.
-
-CRITICAL RULES:
-1. STRICTLY FORBIDDEN to recommend "$cleanTitle" or any remix of it.
-2. It MUST be a COMPLETELY DIFFERENT song.
-3. Output ONLY the search query, e.g. "Artist - Song Title official audio". Do not include quotes or markdown.''';
-
-    try {
-      final response = await _callGroq(
-        system: system,
-        userMessage: 'Recommend next distinct song',
-        maxTokens: 300,
-      );
-      final result = response.trim().replaceAll('"', '').replaceAll("'", "");
-      
-      if (result.toLowerCase().contains(cleanTitle.toLowerCase()) && cleanTitle.length > 3) {
-        debugPrint('[AI] Model menyarankan lagu yang sama ($result), abaikan untuk cegah duplikat.');
-        return null;
-      }
-      return result;
-    } catch (e) {
-      debugPrint('[AI] Failed to recommend next song: $e');
-      return null;
-    }
-  }
-
-  /// Call Groq using OpenAI-compatible Chat Completions API with fallback models
+  /// Multi-Key Round-Robin & Multi-Model resilient Groq API Caller
   Future<String> _callGroq({
     required String system,
     required String userMessage,
     int maxTokens = 1500,
   }) async {
     final uri = Uri.parse('${AppConstants.groqBaseUrl}/chat/completions');
-    final keys = AppConstants.groqApiKeys.where((k) => !k.contains('ISI_API_CADANGAN')).toList();
-    final apiKey = keys.isNotEmpty ? (keys.toList()..shuffle()).first : AppConstants.groqApiKeys.first;
-
+    final keys = (AppConstants.groqApiKeys.toList()..shuffle());
     final modelsToTry = [AppConstants.groqModel, ...AppConstants.fallbackGroqModels].toSet().toList();
     Object? lastError;
 
-    for (final model in modelsToTry) {
-      try {
-        final response = await http.post(
-          uri,
-          headers: {
-            'Authorization': 'Bearer $apiKey',
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'model': model,
-            'temperature': 0.3,
-            'max_tokens': maxTokens,
-            'messages': [
-              {'role': 'system', 'content': system},
-              {'role': 'user', 'content': userMessage},
-            ],
-          }),
-        ).timeout(const Duration(seconds: 30));
+    for (final apiKey in keys) {
+      for (final model in modelsToTry) {
+        try {
+          final response = await http.post(
+            uri,
+            headers: {
+              'Authorization': 'Bearer $apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'model': model,
+              'temperature': 0.3,
+              'max_tokens': maxTokens,
+              'messages': [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': userMessage},
+              ],
+            }),
+          ).timeout(const Duration(seconds: 15));
 
-        if (response.statusCode == 200) {
-          final jsonBody = jsonDecode(response.body) as Map<String, dynamic>;
-          final content = jsonBody['choices'][0]['message']['content'] as String;
-          return content;
-        } else {
-          lastError = 'Groq API error ${response.statusCode}: ${response.body}';
-          debugPrint('[AI] Model $model returned ${response.statusCode}, trying next model...');
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body);
+            final content = data['choices']?[0]?['message']?['content'] as String?;
+            if (content != null && content.isNotEmpty) {
+              return content;
+            }
+          } else if (response.statusCode == 429) {
+            debugPrint('[AI] Key rate limited (429), trying next key in pool...');
+            break; // Break model loop to switch to next API key immediately
+          } else {
+            debugPrint('[AI] Groq $model error: ${response.statusCode} - ${response.body}');
+            lastError = Exception('Groq status: ${response.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[AI] Attempt error: $e');
+          lastError = e;
         }
-      } catch (e) {
-        lastError = e;
-        debugPrint('[AI] Model $model exception: $e, trying next model...');
       }
     }
 
-    throw Exception(lastError ?? 'All Groq models failed');
+    throw Exception('Semua kunci AI dan model cadangan sedang sibuk. Silakan coba lagi sebentar lagi: $lastError');
   }
 
-  String _stripMarkdown(String raw) {
-    var text = raw.trim();
-    if (text.startsWith('```json')) {
-      text = text.substring(7);
-    } else if (text.startsWith('```')) {
-      text = text.substring(3);
+  AiCurationResult _parseCurationResponse(String raw) {
+    try {
+      final jsonStr = _extractJson(raw);
+      final data = jsonDecode(jsonStr);
+
+      final message = data['message'] as String? ?? 'Playlist berhasil dibuat';
+      final resultsList = data['results'] as List<dynamic>? ?? [];
+
+      final queries = resultsList
+          .map((item) {
+            if (item is Map) return item['query']?.toString() ?? '';
+            return item.toString();
+          })
+          .where((q) => q.isNotEmpty)
+          .toList();
+
+      return AiCurationResult(message: message, queries: queries);
+    } catch (e) {
+      debugPrint('[AI] Parse curation error: $e, raw: $raw');
+      final lines = raw
+          .split('\n')
+          .map((l) => l.replaceAll(RegExp(r'^\d+[\.\)]\s*'), '').trim())
+          .where((l) => l.isNotEmpty && !l.startsWith('{') && !l.startsWith('}') && !l.startsWith('`'))
+          .map((l) => '$l official audio')
+          .toList();
+
+      return AiCurationResult(
+        message: 'Playlist berhasil dikurasi oleh AI',
+        queries: lines.isNotEmpty ? lines : ['top pop hits official audio'],
+      );
     }
-    if (text.endsWith('```')) {
-      text = text.substring(0, text.length - 3);
+  }
+
+  List<int> _parseReorderResponse(String raw, int expectedLength) {
+    try {
+      final jsonStr = _extractJson(raw);
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is List) {
+        final indices = decoded.map((e) => (e as num).toInt()).toList();
+        if (indices.length == expectedLength) return indices;
+      }
+    } catch (_) {}
+    return List.generate(expectedLength, (i) => i);
+  }
+
+  AiEditResult _parseEditResponse(String raw, int currentCount) {
+    try {
+      final jsonStr = _extractJson(raw);
+      final data = jsonDecode(jsonStr);
+
+      final message = data['message'] as String? ?? 'Playlist berhasil diubah';
+      final keepList = (data['keep_indices'] as List<dynamic>?)
+              ?.map((e) => (e as num).toInt())
+              .where((i) => i >= 0 && i < currentCount)
+              .toList() ??
+          List.generate(currentCount, (i) => i);
+
+      final newSongsList = data['new_songs'] as List<dynamic>? ?? [];
+      final newQueries = newSongsList
+          .map((item) {
+            if (item is Map) return item['query']?.toString() ?? '';
+            return item.toString();
+          })
+          .where((q) => q.isNotEmpty)
+          .toList();
+
+      return AiEditResult(
+        message: message,
+        keepIndices: keepList,
+        newQueries: newQueries,
+      );
+    } catch (e) {
+      return AiEditResult(
+        message: 'Playlist diperbarui',
+        keepIndices: List.generate(currentCount, (i) => i),
+        newQueries: [],
+      );
     }
-    return text.trim();
+  }
+
+  String _extractJson(String text) {
+    final cleaned = text.trim();
+    if (cleaned.startsWith('```')) {
+      final lines = cleaned.split('\n');
+      final firstBrace = lines.indexWhere((l) => l.contains('{') || l.contains('['));
+      final lastBrace = lines.lastIndexWhere((l) => l.contains('}') || l.contains(']'));
+      if (firstBrace != -1 && lastBrace != -1 && lastBrace >= firstBrace) {
+        return lines.sublist(firstBrace, lastBrace + 1).join('\n');
+      }
+    }
+    final startObj = cleaned.indexOf('{');
+    final startArr = cleaned.indexOf('[');
+    final endObj = cleaned.lastIndexOf('}');
+    final endArr = cleaned.lastIndexOf(']');
+
+    int start = -1;
+    int end = -1;
+
+    if (startObj != -1 && (startArr == -1 || startObj < startArr)) {
+      start = startObj;
+      end = endObj;
+    } else if (startArr != -1) {
+      start = startArr;
+      end = endArr;
+    }
+
+    if (start != -1 && end != -1 && end > start) {
+      return cleaned.substring(start, end + 1);
+    }
+
+    return cleaned;
   }
 }
