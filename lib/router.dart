@@ -13,6 +13,8 @@ import 'screens/downloads/downloads_screen.dart';
 import 'screens/player/full_player_screen.dart';
 import 'screens/profile/profile_screen.dart';
 import 'screens/channel/channel_screen.dart';
+import 'screens/auth/activation_screen.dart';
+import 'services/license_service.dart';
 import 'models/video_item.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -20,7 +22,26 @@ final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final goRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/home',
+  redirect: (context, state) async {
+    final isActivated = await LicenseService().isActivated();
+    final isActivationRoute = state.matchedLocation == '/activation';
+
+    if (!isActivated && !isActivationRoute) {
+      return '/activation';
+    }
+    if (isActivated && isActivationRoute) {
+      return '/home';
+    }
+    return null;
+  },
   routes: [
+    // ── Activation Screen ────────────────────────────────────────
+    GoRoute(
+      path: '/activation',
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (_, __) => const ActivationScreen(),
+    ),
+
     // ── Full Player (modal, above shell) ─────────────────────────
     GoRoute(
       path: '/player',
