@@ -1,0 +1,25 @@
+﻿========================================================================
+🚢 PANDUAN FOLDER OUTPUT SUBMARINE 🚢
+========================================================================
+
+Folder ini berisi seluruh file rilis aplikasi dan dashboard pengelola lisensi:
+
+1. 👑 Submarine-VIP.apk
+   - Versi khusus untuk KAMU PRIBADI.
+   - Nama aplikasi di HP: "Submarine VIP"
+   - Bebas kunci, bebas login, langsung terbuka 100% instan.
+
+2. 🛡️ Submarine-Public.apk
+   - Versi komersil / untuk DIBAGIKAN KE TEMAN.
+   - Nama aplikasi di HP: "Submarine"
+   - Terkunci dengan kode akses. Izin bisa kamu hidupkan/cabut kapan saja lewat dashboard.
+
+3. 🖥️ admin_dashboard.html
+   - Buka file ini di browser (Google Chrome / Edge) di laptop/PC kamu.
+   - Masukkan PIN Admin: 8899
+   - Di sini kamu bisa membuat kode kunci baru untuk teman, melihat daftar nama pemegang kunci, dan mencabut/menghidupkan izin akses mereka secara real-time.
+
+4. ☁️ Backend Cloudflare Worker:
+   - Terletak di folder: Submarine/backend/submarine-license-worker.js
+   - Siap dideploy jika ingin dashboard bisa diakses online lewat HP di mana saja.
+========================================================================

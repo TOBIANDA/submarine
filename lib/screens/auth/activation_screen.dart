@@ -4,6 +4,19 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../services/license_service.dart';
 
+class UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    return TextEditingValue(
+      text: newValue.text.toUpperCase(),
+      selection: newValue.selection,
+    );
+  }
+}
+
 class ActivationScreen extends StatefulWidget {
   const ActivationScreen({super.key});
 
@@ -23,7 +36,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
   }
 
   Future<void> _handleActivation() async {
-    final code = _codeController.text.trim();
+    final code = _codeController.text.trim().toUpperCase().replaceAll(' ', '');
     if (code.isEmpty) {
       setState(() => _errorMessage = 'Masukkan kode akses terlebih dahulu.');
       return;
@@ -59,8 +72,9 @@ class _ActivationScreenState extends State<ActivationScreen> {
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData('text/plain');
     if (data != null && data.text != null) {
+      final cleanText = data.text!.trim().toUpperCase().replaceAll(' ', '');
       setState(() {
-        _codeController.text = data.text!.trim().toUpperCase();
+        _codeController.text = cleanText;
         _errorMessage = null;
       });
     }
@@ -68,9 +82,6 @@ class _ActivationScreenState extends State<ActivationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final size = MediaQuery.of(context).size;
-
     return Scaffold(
       backgroundColor: const Color(0xFF0A0E1A),
       body: Stack(
@@ -208,12 +219,26 @@ class _ActivationScreenState extends State<ActivationScreen> {
                               ),
                               GestureDetector(
                                 onTap: _pasteFromClipboard,
-                                child: Text(
-                                  'Tempel (Paste)',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: const Color(0xFF06B6D4),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF06B6D4).withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.content_paste_rounded, size: 13, color: Color(0xFF06B6D4)),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'Tempel Kode',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF06B6D4),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -222,19 +247,24 @@ class _ActivationScreenState extends State<ActivationScreen> {
                           const SizedBox(height: 10),
                           TextField(
                             controller: _codeController,
-                            textCapitalization: TextCapitalization.characters,
+                            // Tidak memaksa textCapitalization agar keyboard HP normal dan lancar
+                            keyboardType: TextInputType.text,
+                            inputFormatters: [
+                              UpperCaseTextFormatter(),
+                            ],
                             style: const TextStyle(
-                              fontSize: 18,
+                              fontSize: 17,
                               fontWeight: FontWeight.w700,
                               color: Colors.white,
-                              letterSpacing: 2.0,
+                              letterSpacing: 1.5,
                               fontFamily: 'monospace',
                             ),
                             decoration: InputDecoration(
-                              hintText: 'SUB-XXXX-YYYY',
+                              hintText: 'Contoh: SUB-ANDI-9281',
                               hintStyle: TextStyle(
                                 color: Colors.white.withOpacity(0.25),
-                                letterSpacing: 1.5,
+                                letterSpacing: 1.0,
+                                fontSize: 15,
                               ),
                               border: InputBorder.none,
                               prefixIcon: Icon(

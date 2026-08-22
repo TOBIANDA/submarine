@@ -1,5 +1,6 @@
 ﻿// lib/services/license_service.dart
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,7 +29,7 @@ class LicenseService {
   // Flag compile-time: Jika dibuild dengan --dart-define=VIP_BUILD=true maka bebas kunci selamanya
   static const bool isVipBuild = bool.fromEnvironment('VIP_BUILD', defaultValue: false);
 
-  // Cloudflare License Endpoint (Bisa disesuaikan setelah deploy worker)
+  // Cloudflare License Endpoint
   static const String licenseEndpoint = 'https://submarine-keys.workers.dev/api/verify';
 
   // Master VIP keys yang selalu valid secara offline
@@ -42,6 +43,19 @@ class LicenseService {
   static const String _prefKeyActivated = 'sub_license_activated';
   static const String _prefKeyCode = 'sub_license_code';
   static const String _prefKeyName = 'sub_license_name';
+  static const String _prefKeyDeviceId = 'sub_device_id';
+
+  /// Dapatkan atau buat Device ID unik untuk HP ini
+  Future<String> getOrCreateDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? devId = prefs.getString(_prefKeyDeviceId);
+    if (devId == null || devId.isEmpty) {
+      final rand = Random().nextInt(999999).toString().padLeft(6, '0');
+      devId = 'DEV-${DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase()}-$rand';
+      await prefs.setString(_prefKeyDeviceId, devId);
+    }
+    return devId;
+  }
 
   /// Cek apakah aplikasi saat ini dalam status teraktivasi
   Future<bool> isActivated() async {
@@ -72,9 +86,9 @@ class LicenseService {
     return prefs.getString(_prefKeyCode);
   }
 
-  /// Verifikasi kode akses baru
+  /// Verifikasi kode akses baru dengan Device-Lock
   Future<LicenseVerificationResult> verifyAndActivate(String rawCode) async {
-    final code = rawCode.trim().toUpperCase();
+    final code = rawCode.trim().toUpperCase().replaceAll(' ', '');
     if (code.isEmpty) {
       return LicenseVerificationResult(
         isValid: false,
@@ -82,6 +96,8 @@ class LicenseService {
         errorMessage: 'Kode akses tidak boleh kosong.',
       );
     }
+
+    final deviceId = await getOrCreateDeviceId();
 
     // 1. Cek Offline Master Keys
     if (_offlineMasterKeys.contains(code)) {
@@ -94,9 +110,9 @@ class LicenseService {
       );
     }
 
-    // 2. Cek Cloudflare Worker Backend API
+    // 2. Cek Cloudflare Worker Backend API dengan Device-Lock
     try {
-      final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}');
+      final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}&deviceId=${Uri.encodeComponent(deviceId)}');
       final response = await http.get(uri).timeout(const Duration(seconds: 6));
 
       if (response.statusCode == 200) {
@@ -115,7 +131,7 @@ class LicenseService {
         return LicenseVerificationResult(
           isValid: true,
           isActive: false,
-          errorMessage: data['error']?.toString() ?? 'Izin akses telah dicabut oleh admin.',
+          errorMessage: data['error']?.toString() ?? 'Kunci ini sudah terpakai di perangkat lain atau dicabut oleh admin.',
         );
       } else if (response.statusCode == 404) {
         return LicenseVerificationResult(
@@ -128,7 +144,7 @@ class LicenseService {
       debugPrint('[License] Cloud check error: $e');
     }
 
-    // 3. Fallback Algoritma Format Submarine jika offline (SUB-NAMA-XXXX)
+    // 3. Fallback jika offline pertama kali
     if (code.startsWith('SUB-') && code.length >= 8) {
       final parts = code.split('-');
       final name = parts.length > 1 ? parts[1] : 'Pengguna';
@@ -159,11 +175,12 @@ class LicenseService {
     if (_offlineMasterKeys.contains(code)) return true;
 
     try {
-      final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}');
+      final deviceId = await getOrCreateDeviceId();
+      final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}&deviceId=${Uri.encodeComponent(deviceId)}');
       final response = await http.get(uri).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 403) {
-        // Dicabut oleh admin!
+        // Dicabut atau device tidak cocok!
         await revokeLocally();
         return false;
       }

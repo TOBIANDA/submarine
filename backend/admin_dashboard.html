@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Submarine - Admin Licensing Dashboard (Local & Cloud)</title>
+  <title>Submarine - Admin Licensing & Device-Lock Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -18,6 +18,7 @@
       --accent: #06b6d4;
       --success: #10b981;
       --danger: #ef4444;
+      --warning: #f59e0b;
       --text: #f3f4f6;
       --text-dim: #9ca3af;
     }
@@ -32,7 +33,7 @@
       align-items: center;
       padding: 30px 20px;
     }
-    .container { width: 100%; max-width: 1000px; }
+    .container { width: 100%; max-width: 1050px; }
     header {
       display: flex;
       align-items: center;
@@ -62,7 +63,6 @@
       box-shadow: 0 20px 40px rgba(0,0,0,0.4);
     }
     
-    /* Login Box */
     #loginSection { max-width: 420px; margin: 60px auto; text-align: center; }
     .input-group { margin-bottom: 18px; text-align: left; }
     .input-group label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 6px; font-weight: 500; }
@@ -84,10 +84,10 @@
       align-items: center;
       justify-content: center;
       gap: 8px;
-      padding: 12px 22px;
+      padding: 11px 20px;
       border-radius: 12px;
       font-weight: 600;
-      font-size: 14px;
+      font-size: 13px;
       border: none;
       cursor: pointer;
       transition: all 0.2s ease;
@@ -98,14 +98,14 @@
       box-shadow: 0 4px 15px var(--primary-glow);
     }
     .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(99,102,241,0.5); }
-    .btn-sm { padding: 7px 14px; font-size: 12px; border-radius: 8px; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
     .btn-outline { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: var(--text); }
     .btn-outline:hover { background: rgba(255,255,255,0.05); }
     .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
     .btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
+    .btn-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .btn-warning:hover { background: rgba(245, 158, 11, 0.3); }
     
-    /* Stats & Controls */
-    .controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .stat-card {
       background: rgba(15, 20, 35, 0.6);
@@ -116,7 +116,6 @@
     .stat-card h3 { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 4px; }
     .stat-card .val { font-size: 26px; font-weight: 700; }
     
-    /* Table */
     .table-container { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; text-align: left; }
     th { padding: 14px 16px; font-size: 12px; color: var(--text-dim); text-transform: uppercase; border-bottom: 1px solid var(--card-border); }
@@ -145,13 +144,16 @@
     }
     .badge-active { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .badge-revoked { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-device { background: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
+    .badge-available { background: rgba(156, 163, 175, 0.15); color: #d1d5db; border: 1px solid rgba(156, 163, 175, 0.3); }
     .dot { width: 7px; height: 7px; border-radius: 50%; }
     .badge-active .dot { background: #34d399; box-shadow: 0 0 8px #34d399; }
     .badge-revoked .dot { background: #f87171; }
+    .badge-device .dot { background: #22d3ee; }
+    .badge-available .dot { background: #9ca3af; }
     
-    .action-group { display: flex; gap: 8px; align-items: center; }
+    .action-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     
-    /* Modal */
     .modal {
       position: fixed; inset: 0; background: rgba(0,0,0,0.7);
       backdrop-filter: blur(8px); display: none; align-items: center; justify-content: center; z-index: 999;
@@ -170,7 +172,7 @@
         <div class="brand-icon">🚢</div>
         <div>
           <h1>Submarine Control</h1>
-          <p>Sistem Pengendalian Lisensi & Izin Akses Pengguna</p>
+          <p>Sistem Pengendalian Lisensi & Anti-Share (1 Kunci = 1 HP)</p>
         </div>
       </div>
       <div id="adminHeaderActions" style="display:none;">
@@ -195,15 +197,19 @@
       <!-- Stats -->
       <div class="stats-grid">
         <div class="stat-card">
-          <h3>Total Kunci Terdaftar</h3>
+          <h3>Total Kunci</h3>
           <div class="val" id="totalKeysCount">0</div>
         </div>
         <div class="stat-card">
-          <h3>Akses Aktif</h3>
+          <h3>Izin Aktif</h3>
           <div class="val" id="activeKeysCount" style="color:#34d399;">0</div>
         </div>
         <div class="stat-card">
-          <h3>Akses Dicabut</h3>
+          <h3>Terkunci di HP (Used)</h3>
+          <div class="val" id="lockedKeysCount" style="color:#22d3ee;">0</div>
+        </div>
+        <div class="stat-card">
+          <h3>Izin Dicabut</h3>
           <div class="val" id="revokedKeysCount" style="color:#f87171;">0</div>
         </div>
       </div>
@@ -212,8 +218,8 @@
       <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
           <div>
-            <h2 style="font-size:18px; font-weight:700;">Daftar Kunci & Izin Akses Teman</h2>
-            <p style="color:var(--text-dim); font-size:13px;">Kelola siapa saja yang boleh membuka aplikasi Submarine secara real-time.</p>
+            <h2 style="font-size:18px; font-weight:700;">Daftar Kunci & Perangkat Teman (Device-Lock)</h2>
+            <p style="color:var(--text-dim); font-size:13px;">Setiap kunci hanya bisa dipakai pada 1 HP. Teman tidak bisa membagikan kodenya ke orang lain.</p>
           </div>
           <button class="btn btn-primary" onclick="openCreateModal()">+ Buat Kunci Baru</button>
         </div>
@@ -225,8 +231,8 @@
                 <th>Nama Panggilan</th>
                 <th>Kode Akses</th>
                 <th>Status Izin</th>
-                <th>Tanggal Buat</th>
-                <th>Aksi Saklar</th>
+                <th>Status Perangkat (1 HP)</th>
+                <th>Aksi Kelola</th>
               </tr>
             </thead>
             <tbody id="keysTableBody">
@@ -264,9 +270,9 @@
     const DEFAULT_PIN = "8899";
     let adminPin = localStorage.getItem("sub_admin_pin") || "";
     let keysList = JSON.parse(localStorage.getItem("sub_local_keys") || "null") || [
-      { code: "SUB-VIP-MASTER", name: "Tobi Admin", active: true, createdAt: "2026-08-22" },
-      { code: "SUB-ANDI-9281", name: "Andi Kampus", active: true, createdAt: "2026-08-22" },
-      { code: "SUB-BUDI-3142", name: "Budi Rekan", active: false, createdAt: "2026-08-22" },
+      { code: "SUB-VIP-MASTER", name: "Tobi Admin", active: true, boundDeviceId: null, createdAt: "2026-08-22" },
+      { code: "SUB-ANDI-9281", name: "Andi Kampus", active: true, boundDeviceId: "DEV-M39K-123456", createdAt: "2026-08-22" },
+      { code: "SUB-BUDI-3142", name: "Budi Rekan", active: false, boundDeviceId: null, createdAt: "2026-08-22" },
     ];
 
     window.onload = () => {
@@ -314,21 +320,32 @@
 
       let activeCount = 0;
       let revokedCount = 0;
+      let lockedCount = 0;
 
       if (keysList.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-dim);">Belum ada kunci dibuat. Klik tombol "+ Buat Kunci Baru" di atas.</td></tr>';
       } else {
         keysList.forEach(k => {
           if (k.active) activeCount++; else revokedCount++;
+          if (k.boundDeviceId) lockedCount++;
+
           const tr = document.createElement("tr");
 
           const statusBadge = k.active 
-            ? '<span class="badge-status badge-active"><span class="dot"></span> AKTIF (BISA AKSES)</span>'
-            : '<span class="badge-status badge-revoked"><span class="dot"></span> DICABUT (TERKUNCI)</span>';
+            ? '<span class="badge-status badge-active"><span class="dot"></span> AKTIF</span>'
+            : '<span class="badge-status badge-revoked"><span class="dot"></span> DICABUT</span>';
+
+          const deviceBadge = k.boundDeviceId
+            ? `<span class="badge-status badge-device"><span class="dot"></span> 🔒 Terikat di HP (${escapeHtml(k.boundDeviceId.substring(0, 10))}...)</span>`
+            : '<span class="badge-status badge-available"><span class="dot"></span> 🔓 Belum Dipakai (Siap Dibagi)</span>';
 
           const toggleBtn = k.active
             ? `<button class="btn btn-danger btn-sm" onclick="toggleKey('${k.code}')">🛑 Cabut Izin</button>`
-            : `<button class="btn btn-primary btn-sm" style="background:#10b981;" onclick="toggleKey('${k.code}')">✅ Hidupkan Izin</button>`;
+            : `<button class="btn btn-primary btn-sm" style="background:#10b981;" onclick="toggleKey('${k.code}')">✅ Hidupkan</button>`;
+
+          const resetDeviceBtn = k.boundDeviceId
+            ? `<button class="btn btn-warning btn-sm" title="Buka Kunci HP jika teman ganti HP" onclick="resetDevice('${k.code}')">🔄 Reset HP</button>`
+            : '';
 
           tr.innerHTML = `
             <td><strong>${escapeHtml(k.name)}</strong></td>
@@ -337,10 +354,11 @@
               <button style="background:none; border:none; color:var(--accent); cursor:pointer; margin-left:6px;" title="Copy Kunci" onclick="copyText('${k.code}')">📋</button>
             </td>
             <td>${statusBadge}</td>
-            <td style="color:var(--text-dim); font-size:13px;">${k.createdAt || '-'}</td>
+            <td>${deviceBadge}</td>
             <td>
               <div class="action-group">
                 ${toggleBtn}
+                ${resetDeviceBtn}
                 <button class="btn btn-outline btn-sm" style="color:#f87171;" title="Hapus Permanen" onclick="deleteKey('${k.code}')">🗑️</button>
               </div>
             </td>
@@ -351,6 +369,7 @@
 
       document.getElementById("totalKeysCount").innerText = keysList.length;
       document.getElementById("activeKeysCount").innerText = activeCount;
+      document.getElementById("lockedKeysCount").innerText = lockedCount;
       document.getElementById("revokedKeysCount").innerText = revokedCount;
     }
 
@@ -359,6 +378,16 @@
       if (key) {
         key.active = !key.active;
         saveLocal();
+      }
+    }
+
+    function resetDevice(code) {
+      const key = keysList.find(k => k.code === code);
+      if (key) {
+        if (!confirm("Reset Device Lock untuk " + key.name + "? Kode ini akan bisa diaktivasi lagi di HP baru.")) return;
+        key.boundDeviceId = null;
+        saveLocal();
+        alert("Device lock berhasil direset!");
       }
     }
 
@@ -380,7 +409,7 @@
 
     function submitCreateKey() {
       const name = document.getElementById("newKeyName").value.trim();
-      let code = document.getElementById("newKeyCode").value.trim().toUpperCase();
+      let code = document.getElementById("newKeyCode").value.trim().toUpperCase().replace(/\s+/g, '');
       if (!name) { alert("Masukkan nama teman!"); return; }
 
       if (!code) {
@@ -397,6 +426,7 @@
         code,
         name,
         active: true,
+        boundDeviceId: null,
         createdAt: new Date().toISOString().split("T")[0]
       });
 
