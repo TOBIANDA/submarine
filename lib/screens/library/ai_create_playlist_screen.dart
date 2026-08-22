@@ -34,7 +34,7 @@ class _AiCreatePlaylistScreenState
   String _aiMessage = '';
   List<String> _aiReasons = [];
 
-  int _songCount = 10;
+  int _songCount = 15;
 
   @override
   void dispose() {
@@ -43,55 +43,109 @@ class _AiCreatePlaylistScreenState
     super.dispose();
   }
 
+  List<String> _parseDirectSongList(String text) {
+    final lines = text.split('\n');
+    final ignoredPhrases = [
+      'daftar lagu',
+      'jangan lebih',
+      'harus tepat',
+      'deskripsi',
+      'playlist',
+      'tracklist',
+      'judul lagu',
+      'penyanyi',
+    ];
+
+    final songs = <String>[];
+    for (var line in lines) {
+      var clean = line.trim();
+      if (clean.isEmpty) continue;
+
+      final lower = clean.toLowerCase();
+      if (ignoredPhrases.any((p) => lower == p || lower.startsWith(p) && !clean.contains('–') && !clean.contains('-'))) {
+        continue;
+      }
+
+      if (clean.contains('–') || clean.contains('—') || clean.contains('-') || clean.contains(':')) {
+        // Strip leading numbers like "1. " or "1) " without affecting song titles like "18 – One Direction"
+        clean = clean.replaceAll(RegExp(r'^\s*\d+[\.\)]\s+'), '');
+        if (clean.isNotEmpty) {
+          songs.add(clean);
+        }
+      }
+    }
+    return songs;
+  }
+
   Future<void> _generate() async {
     final desc = _descCtrl.text.trim();
     if (desc.isEmpty) return;
 
     setState(() {
       _step = _AiCreateStep.loading;
-      _loadingMsg = '🤖 AI sedang memilih lagu untuk kamu...';
+      _loadingMsg = '✨ Menyiapkan daftar lagu untuk kamu...';
       _error = null;
       _previewItems = [];
       _unchecked.clear();
     });
 
     try {
-      // Step 1 – Ask Claude for search queries
-      final curation = await AiService().curatePlaylist(desc, count: _songCount);
+      final List<String> queries;
+      final List<String> reasons;
+      final String message;
 
-      setState(() =>
-          _loadingMsg = '🔍 Mencari $_songCount lagu di YouTube...');
+      final directList = _parseDirectSongList(desc);
+      if (directList.length >= 2) {
+        // Direct list mode: match every song exactly from user input
+        queries = directList.map((s) => '$s official audio').toList();
+        reasons = List.generate(directList.length, (i) => 'Sesuai daftar kamu');
+        message = 'Berhasil memuat ${directList.length} lagu sesuai daftar yang kamu minta!';
+      } else {
+        // AI prompt curation mode
+        final curation = await AiService().curatePlaylist(desc, count: _songCount);
+        queries = curation.queries;
+        reasons = curation.reasons;
+        message = curation.message;
+      }
 
-      // Step 2 – Search YouTube for each query in parallel (batched)
-      final futures = curation.queries
-          .map((q) => YoutubeService().searchVideos(q, maxResults: 1))
-          .toList();
-      final results = await Future.wait(futures);
+      setState(() => _loadingMsg = '🔍 Mencari ${queries.length} lagu di YouTube...');
 
       final items = <VideoItem>[];
       final matchedReasons = <String>[];
       final seen = <String>{};
-      
-      for (int i = 0; i < results.length; i++) {
-        final batch = results[i];
-        for (final v in batch) {
-          if (!seen.contains(v.videoId)) {
-            seen.add(v.videoId);
-            items.add(v);
-            matchedReasons.add(curation.reasons[i]);
+
+      // Search YouTube in parallel chunks of 6 to prevent throttling
+      for (int i = 0; i < queries.length; i += 6) {
+        final end = (i + 6 > queries.length) ? queries.length : i + 6;
+        final chunk = queries.sublist(i, end);
+        final futures = chunk.map((q) => YoutubeService().searchVideos(q, maxResults: 1)).toList();
+        final chunkResults = await Future.wait(futures);
+
+        for (int j = 0; j < chunkResults.length; j++) {
+          final qIndex = i + j;
+          final batch = chunkResults[j];
+          for (final v in batch) {
+            if (!seen.contains(v.videoId)) {
+              seen.add(v.videoId);
+              items.add(v);
+              matchedReasons.add(reasons[qIndex]);
+            }
           }
         }
       }
 
-      // Auto-fill playlist name from description
       if (_nameCtrl.text.isEmpty) {
-        final words = desc.split(' ').take(4).join(' ');
-        _nameCtrl.text = words;
+        if (directList.length >= 2) {
+          _nameCtrl.text = 'Daftar Lagu Pilihan (${items.length} Lagu)';
+        } else {
+          final words = desc.split(' ').take(4).join(' ');
+          _nameCtrl.text = words.isNotEmpty ? words : 'Playlist AI';
+        }
       }
 
       setState(() {
         _previewItems = items;
-        _aiMessage = curation.message;
+        _aiMessage = message;
         _aiReasons = matchedReasons;
         _step = _AiCreateStep.preview;
       });
@@ -122,11 +176,12 @@ class _AiCreatePlaylistScreenState
     await ref.read(playlistProvider.notifier).addPlaylist(playlist);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('✨ Playlist berhasil dibuat!'),
-        backgroundColor: AppTheme.aiColor,
-        behavior: SnackBarBehavior.floating,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Playlist "$name" (${finalItems.length} lagu) disimpan!'),
+          backgroundColor: AppTheme.primary,
+        ),
+      );
       context.pop();
     }
   }
@@ -138,58 +193,58 @@ class _AiCreatePlaylistScreenState
       appBar: AppBar(
         title: const Row(
           children: [
-            Icon(Icons.auto_awesome_rounded,
-                color: AppTheme.aiColor, size: 20),
+            Icon(Icons.auto_awesome_rounded, color: AppTheme.aiColor, size: 20),
             SizedBox(width: 8),
-            Text('Buat Playlist via AI'),
+            Text('Buat Playlist via AI',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
           ],
         ),
       ),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 300),
-        child: _step == _AiCreateStep.loading
-            ? _LoadingView(message: _loadingMsg)
-            : _step == _AiCreateStep.preview
-                ? _PreviewView(
-                    aiMessage: _aiMessage,
-                    aiReasons: _aiReasons,
-                    items: _previewItems,
-                    unchecked: _unchecked,
-                    nameCtrl: _nameCtrl,
-                    onToggle: (i) => setState(() => _unchecked.contains(i)
-                        ? _unchecked.remove(i)
-                        : _unchecked.add(i)),
-                    onRegenerate: () =>
-                        setState(() => _step = _AiCreateStep.input),
-                    onSave: _savePlaylist,
-                  )
-                : _InputView(
-                    ctrl: _descCtrl,
-                    error: _error,
-                    songCount: _songCount,
-                    onCountChanged: (val) => setState(() => _songCount = val),
-                    onGenerate: _generate,
-                  ),
-      ),
+      body: switch (_step) {
+        _AiCreateStep.input => _InputView(
+            descCtrl: _descCtrl,
+            error: _error,
+            songCount: _songCount,
+            onSongCountChanged: (v) => setState(() => _songCount = v),
+            onGenerate: _generate,
+          ),
+        _AiCreateStep.loading => _LoadingView(message: _loadingMsg),
+        _AiCreateStep.preview => _PreviewView(
+            aiMessage: _aiMessage,
+            aiReasons: _aiReasons,
+            items: _previewItems,
+            unchecked: _unchecked,
+            nameCtrl: _nameCtrl,
+            onToggle: (i) => setState(() {
+              if (_unchecked.contains(i)) {
+                _unchecked.remove(i);
+              } else {
+                _unchecked.add(i);
+              }
+            }),
+            onRegenerate: () => setState(() => _step = _AiCreateStep.input),
+            onSave: _savePlaylist,
+          ),
+      },
     );
   }
 }
 
-// ──────────────────────────────────────────────────────────────
+// 
 // Input View
-// ──────────────────────────────────────────────────────────────
+// 
 class _InputView extends StatelessWidget {
-  final TextEditingController ctrl;
+  final TextEditingController descCtrl;
   final String? error;
   final int songCount;
-  final ValueChanged<int> onCountChanged;
+  final ValueChanged<int> onSongCountChanged;
   final VoidCallback onGenerate;
 
   const _InputView({
-    required this.ctrl,
-    this.error,
+    required this.descCtrl,
+    required this.error,
     required this.songCount,
-    required this.onCountChanged,
+    required this.onSongCountChanged,
     required this.onGenerate,
   });
 
@@ -202,52 +257,61 @@ class _InputView extends StatelessWidget {
         children: [
           // AI badge
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              gradient: AppTheme.aiGradient,
+              color: AppTheme.aiColor.withOpacity(0.15),
               borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppTheme.aiColor.withOpacity(0.4)),
             ),
             child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.psychology_rounded,
-                    color: Colors.white, size: 16),
+                Icon(Icons.psychology_rounded, size: 14, color: AppTheme.aiColor),
                 SizedBox(width: 6),
-                Text('Powered by Claude AI',
+                Text('AI Assistant & Smart Playlist Engine',
                     style: TextStyle(
-                        color: Colors.white,
+                        color: AppTheme.aiColor,
                         fontSize: 12,
                         fontWeight: FontWeight.w600)),
               ],
             ),
           ),
-
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           const Text(
-            'Deskripsikan playlist\nyang kamu inginkan',
+            'Deskripsikan playlist atau tempel daftar lagumu',
             style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              height: 1.2,
-            ),
+                color: AppTheme.textPrimary,
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                height: 1.3),
           ),
           const SizedBox(height: 8),
           const Text(
-            'AI akan mencarikan lagu-lagu YouTube yang sesuai.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+            'Ketik tema/suasana, atau tempel daftar judul lagu & penyanyi secara langsung.',
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
           ),
+          const SizedBox(height: 20),
 
-          const SizedBox(height: 24),
+          // Textarea
           TextField(
-            controller: ctrl,
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
-            maxLines: 5,
-            minLines: 3,
-            decoration: const InputDecoration(
+            controller: descCtrl,
+            maxLines: 7,
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+            decoration: InputDecoration(
               hintText:
-                  'e.g. "lo-fi buat belajar, 10 lagu, jangan yang terlalu monoton"',
+                  'Contoh:\n- Lagu galau akustik Indonesia tahun 2000-an\n- Atau tempel daftar: "18 - One Direction, 8 Letters - Why Don\'t We..."',
+              hintStyle:
+                  const TextStyle(color: AppTheme.textMuted, fontSize: 13),
+              filled: true,
+              fillColor: AppTheme.surface,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: AppTheme.divider),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: AppTheme.aiColor, width: 1.5),
+              ),
             ),
           ),
 
@@ -256,13 +320,12 @@ class _InputView extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppTheme.error.withValues(alpha: 0.1),
+                color: AppTheme.error.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppTheme.error.withValues(alpha: 0.3)),
+                border: Border.all(color: AppTheme.error.withOpacity(0.3)),
               ),
               child: Text(error!,
-                  style: const TextStyle(
-                      color: AppTheme.error, fontSize: 13)),
+                  style: const TextStyle(color: AppTheme.error, fontSize: 13)),
             ),
           ],
 
@@ -270,40 +333,32 @@ class _InputView extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Jumlah Lagu:',
-                style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600),
-              ),
-              Text(
-                '$songCount Lagu',
-                style: const TextStyle(
-                    color: AppTheme.aiColor,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold),
-              ),
+              const Text('Jumlah Lagu AI:',
+                  style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600)),
+              Text('$songCount Lagu',
+                  style: const TextStyle(
+                      color: AppTheme.aiColor,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700)),
             ],
           ),
           Slider(
             value: songCount.toDouble(),
             min: 5,
-              max: 60,
-              divisions: 11,
+            max: 60,
+            divisions: 11,
             activeColor: AppTheme.aiColor,
-            inactiveColor: AppTheme.surface.withValues(alpha: 0.5),
-            label: songCount.toString(),
-            onChanged: (val) => onCountChanged(val.toInt()),
+            inactiveColor: AppTheme.surfaceVariant,
+            label: '$songCount Lagu',
+            onChanged: (v) => onSongCountChanged(v.round()),
           ),
 
           const SizedBox(height: 16),
-          // Example chips
-          const Text('Contoh:',
-              style: TextStyle(
-                  color: AppTheme.textMuted,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500)),
+          const Text('Contoh cepat:',
+              style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -313,19 +368,17 @@ class _InputView extends StatelessWidget {
               'workout EDM 10 lagu',
               'acoustic romance indo',
               'classical focus study',
-            ]
-                .map((s) => ActionChip(
-                      label: Text(s,
-                          style: const TextStyle(
-                              color: AppTheme.textSecondary, fontSize: 12)),
-                      backgroundColor: AppTheme.surfaceVariant,
-                      side: BorderSide.none,
-                      onPressed: () => ctrl.text = s,
-                    ))
-                .toList(),
+            ].map((preset) => ActionChip(
+                  label: Text(preset,
+                      style: const TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 12)),
+                  backgroundColor: AppTheme.surface,
+                  side: const BorderSide(color: AppTheme.divider),
+                  onPressed: () => descCtrl.text = preset,
+                )).toList(),
           ),
 
-          const SizedBox(height: 28),
+          const SizedBox(height: 32),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -333,9 +386,11 @@ class _InputView extends StatelessWidget {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.aiColor,
                 padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
               ),
               icon: const Icon(Icons.auto_awesome_rounded,
-                  color: Colors.white),
+                  color: Colors.white, size: 20),
               label: const Text('Generate Playlist',
                   style: TextStyle(
                       color: Colors.white,
@@ -349,9 +404,9 @@ class _InputView extends StatelessWidget {
   }
 }
 
-// ──────────────────────────────────────────────────────────────
+// 
 // Loading View
-// ──────────────────────────────────────────────────────────────
+// 
 class _LoadingView extends StatelessWidget {
   final String message;
   const _LoadingView({required this.message});
@@ -383,7 +438,7 @@ class _LoadingView extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Ini mungkin butuh beberapa detik...',
+              'Sedang mencocokkan setiap lagu dari daftar...',
               style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
             ),
           ],
@@ -393,9 +448,9 @@ class _LoadingView extends StatelessWidget {
   }
 }
 
-// ──────────────────────────────────────────────────────────────
+// 
 // Preview View
-// ──────────────────────────────────────────────────────────────
+// 
 class _PreviewView extends StatelessWidget {
   final String aiMessage;
   final List<String> aiReasons;
@@ -422,15 +477,14 @@ class _PreviewView extends StatelessWidget {
     final selectedCount = items.length - unchecked.length;
     return Column(
       children: [
-        // AI Message Box
         if (aiMessage.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppTheme.aiColor.withValues(alpha: 0.1),
-                border: Border.all(color: AppTheme.aiColor.withValues(alpha: 0.3)),
+                color: AppTheme.aiColor.withOpacity(0.1),
+                border: Border.all(color: AppTheme.aiColor.withOpacity(0.3)),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(16),
                   topRight: Radius.circular(16),
@@ -441,7 +495,7 @@ class _PreviewView extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.psychology_rounded, color: AppTheme.aiColor, size: 20),
+                  const Icon(Icons.playlist_add_check_rounded, color: AppTheme.aiColor, size: 20),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
@@ -450,6 +504,7 @@ class _PreviewView extends StatelessWidget {
                         color: AppTheme.textPrimary,
                         fontSize: 13,
                         height: 1.4,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
@@ -458,7 +513,6 @@ class _PreviewView extends StatelessWidget {
             ),
           ),
         
-        // Playlist name input
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: TextField(
@@ -474,7 +528,6 @@ class _PreviewView extends StatelessWidget {
             ),
           ),
         ),
-        // Count + header
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: Row(
@@ -495,7 +548,6 @@ class _PreviewView extends StatelessWidget {
             ],
           ),
         ),
-        // List
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.only(bottom: 80),
@@ -523,7 +575,7 @@ class _PreviewView extends StatelessWidget {
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Icon(Icons.info_outline_rounded, size: 14, color: AppTheme.aiColor),
+                                  const Icon(Icons.check_circle_rounded, size: 14, color: AppTheme.aiColor),
                                   const SizedBox(width: 6),
                                   Expanded(
                                     child: Text(
@@ -531,7 +583,7 @@ class _PreviewView extends StatelessWidget {
                                       style: const TextStyle(
                                         color: AppTheme.aiColor,
                                         fontSize: 12,
-                                        fontStyle: FontStyle.italic,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                   ),
@@ -547,7 +599,6 @@ class _PreviewView extends StatelessWidget {
             },
           ),
         ),
-        // Save button
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           child: SizedBox(
@@ -573,5 +624,4 @@ class _PreviewView extends StatelessWidget {
     );
   }
 }
-
 
