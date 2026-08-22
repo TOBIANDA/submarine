@@ -151,7 +151,7 @@ class DbService {
 
   // ── Playlists ─────────────────────────────────────────────────────────────
 
-  Future<List<Playlist>> getPlaylists() async {
+  Future<List<Playlist>> getAllPlaylists() => getPlaylists();`n`n  Future<List<Playlist>> getPlaylists() async {
     final db = await database;
     final rows = await db.query('playlists', orderBy: 'createdAt DESC');
     return rows.map(Playlist.fromMap).toList();
