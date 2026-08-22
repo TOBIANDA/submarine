@@ -1,12 +1,15 @@
 ﻿// backend/submarine-license-worker.js
-// Cloudflare Worker: License Key Engine & Web Admin Dashboard for Submarine (With Device Lock)
+// Cloudflare Worker: Full Custom Key Generator & Licensing Backend
 
-const ADMIN_PIN = "8899"; // Ganti PIN admin ini sesuai keinginanmu
+const ADMIN_PIN = "8899";
+const SALT = "SubMarine_Secure_2026_Salt";
 
 let defaultKeys = [
-  { code: "SUB-VIP-MASTER", name: "Tobi Admin", active: true, boundDeviceId: null, createdAt: "2026-08-22" },
-  { code: "SUB-ANDI-9281", name: "Andi Kampus", active: true, boundDeviceId: null, createdAt: "2026-08-22" },
-  { code: "SUB-BUDI-3142", name: "Budi Rekan", active: false, boundDeviceId: null, createdAt: "2026-08-22" },
+  { code: "SUB-VIP", name: "TOBI VIP", active: true, createdAt: "2026-08-22" },
+  { code: "SUB-TOBI-D705EE", name: "TOBI", active: true, createdAt: "2026-08-22" },
+  { code: "SUB-ANDI-958D09", name: "ANDI", active: true, createdAt: "2026-08-22" },
+  { code: "SUB-GHAZI-A5AF49", name: "GHAZI", active: true, createdAt: "2026-08-22" },
+  { code: "SUB-BUDI-5AD569", name: "BUDI", active: true, createdAt: "2026-08-22" },
 ];
 
 export default {
@@ -47,11 +50,9 @@ export default {
       }
     }
 
-    // ── 1. API: Verify License Key with Device-Lock ──
+    // ── 1. API: Verify License Key (Dipanggil oleh HP) ──
     if (url.pathname === "/api/verify") {
       const code = (url.searchParams.get("code") || "").trim().toUpperCase().replace(/\s+/g, '');
-      const deviceId = (url.searchParams.get("deviceId") || "").trim();
-
       if (!code) {
         return new Response(JSON.stringify({ valid: false, error: "Kode kunci tidak boleh kosong" }), {
           status: 400,
@@ -63,7 +64,7 @@ export default {
       const match = keys.find(k => k.code.toUpperCase() === code);
 
       if (!match) {
-        return new Response(JSON.stringify({ valid: false, error: "Kunci akses tidak terdaftar di sistem" }), {
+        return new Response(JSON.stringify({ valid: false, error: "Kode kunci tidak terdaftar di sistem" }), {
           status: 404,
           headers: corsHeaders,
         });
@@ -76,60 +77,27 @@ export default {
         });
       }
 
-      // Device-Lock Enforcement: 1 Kunci = 1 HP
-      if (deviceId) {
-        if (!match.boundDeviceId) {
-          // Kunci pertama kali dipakai di HP ini -> Kunci permanen ke deviceId ini!
-          match.boundDeviceId = deviceId;
-          match.usedAt = new Date().toISOString();
-          await saveKeys(keys);
-        } else if (match.boundDeviceId !== deviceId) {
-          // Kunci sudah terikat di HP lain!
-          return new Response(JSON.stringify({
-            valid: true,
-            active: false,
-            error: "Kunci ini sudah terpakai di perangkat lain! Kunci hanya bisa dipakai pada 1 HP."
-          }), {
-            status: 403,
-            headers: corsHeaders,
-          });
-        }
-      }
-
       return new Response(JSON.stringify({ valid: true, active: true, name: match.name, code: match.code }), {
         status: 200,
         headers: corsHeaders,
       });
     }
 
-    // ── 2. API: Admin Endpoints (PIN Protected) ──
-    if (url.pathname.startsWith("/api/admin")) {
-      const authHeader = request.headers.get("Authorization") || "";
-      const pin = authHeader.replace("Bearer ", "").trim();
-      const currentAdminPin = (env && env.ADMIN_PIN) ? env.ADMIN_PIN : ADMIN_PIN;
-
-      if (pin !== currentAdminPin) {
-        return new Response(JSON.stringify({ error: "PIN Admin tidak valid" }), {
-          status: 401,
-          headers: corsHeaders,
-        });
-      }
-
-      // GET /api/admin/keys
-      if (url.pathname === "/api/admin/keys" && request.method === "GET") {
+    // ── 2. API: Admin Endpoints ──
+    if (url.pathname === "/api/keys") {
+      if (request.method === "GET") {
         const keys = await getKeys();
         return new Response(JSON.stringify({ keys }), { headers: corsHeaders });
       }
 
-      // POST /api/admin/keys (Create Key)
-      if (url.pathname === "/api/admin/keys" && request.method === "POST") {
+      if (request.method === "POST") {
         const body = await request.json();
-        const name = (body.name || "Pengguna").trim();
+        const name = (body.name || "Pengguna").trim().toUpperCase();
         let code = (body.code || "").trim().toUpperCase().replace(/\s+/g, '');
-        
+
         if (!code) {
           const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
-          code = `SUB-${name.substring(0, 4).toUpperCase()}-${rand}`;
+          code = `SUB-${name.substring(0, 4)}-${rand}`;
         }
 
         const keys = await getKeys();
@@ -144,7 +112,6 @@ export default {
           code,
           name,
           active: true,
-          boundDeviceId: null,
           createdAt: new Date().toISOString().split("T")[0],
         };
 
@@ -153,50 +120,9 @@ export default {
         return new Response(JSON.stringify({ success: true, key: newKey }), { headers: corsHeaders });
       }
 
-      // POST /api/admin/toggle (Toggle Active / Revoke)
-      if (url.pathname === "/api/admin/toggle" && request.method === "POST") {
+      if (request.method === "DELETE") {
         const body = await request.json();
         const code = (body.code || "").trim().toUpperCase();
-
-        const keys = await getKeys();
-        const key = keys.find(k => k.code === code);
-        if (!key) {
-          return new Response(JSON.stringify({ error: "Kunci tidak ditemukan" }), {
-            status: 404,
-            headers: corsHeaders,
-          });
-        }
-
-        key.active = !key.active;
-        await saveKeys(keys);
-        return new Response(JSON.stringify({ success: true, key }), { headers: corsHeaders });
-      }
-
-      // POST /api/admin/reset-device (Reset Device Lock)
-      if (url.pathname === "/api/admin/reset-device" && request.method === "POST") {
-        const body = await request.json();
-        const code = (body.code || "").trim().toUpperCase();
-
-        const keys = await getKeys();
-        const key = keys.find(k => k.code === code);
-        if (!key) {
-          return new Response(JSON.stringify({ error: "Kunci tidak ditemukan" }), {
-            status: 404,
-            headers: corsHeaders,
-          });
-        }
-
-        key.boundDeviceId = null;
-        key.usedAt = null;
-        await saveKeys(keys);
-        return new Response(JSON.stringify({ success: true, message: "Device lock berhasil direset. Kunci siap dipakai di HP baru." }), { headers: corsHeaders });
-      }
-
-      // DELETE /api/admin/keys (Delete Key)
-      if (url.pathname === "/api/admin/keys" && request.method === "DELETE") {
-        const body = await request.json();
-        const code = (body.code || "").trim().toUpperCase();
-
         let keys = await getKeys();
         keys = keys.filter(k => k.code !== code);
         await saveKeys(keys);
@@ -204,33 +130,32 @@ export default {
       }
     }
 
-    return new Response(renderAdminDashboardHtml(), {
+    // ── 3. Serve Web Admin Dashboard ──
+    return new Response(dashboardHtml, {
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   },
 };
 
-function renderAdminDashboardHtml() {
-  return `<!DOCTYPE html>
+const dashboardHtml = `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Submarine - Admin Licensing & Device-Lock Dashboard</title>
+  <title>Submarine - Admin Licensing Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-gradient: radial-gradient(circle at 10% 20%, rgba(18, 22, 34, 1) 0%, rgba(8, 10, 16, 1) 90%);
-      --card-bg: rgba(22, 28, 45, 0.75);
-      --card-border: rgba(255, 255, 255, 0.08);
+      --bg-gradient: radial-gradient(circle at 10% 20%, #121622 0%, #080a10 90%);
+      --card-bg: rgba(22, 28, 45, 0.85);
+      --card-border: rgba(255, 255, 255, 0.1);
       --primary: #6366f1;
       --primary-glow: rgba(99, 102, 241, 0.35);
       --accent: #06b6d4;
       --success: #10b981;
       --danger: #ef4444;
-      --warning: #f59e0b;
       --text: #f3f4f6;
       --text-dim: #9ca3af;
     }
@@ -282,7 +207,7 @@ function renderAdminDashboardHtml() {
       width: 100%;
       padding: 13px 16px;
       background: rgba(15, 19, 32, 0.8);
-      border: 1px solid rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.15);
       border-radius: 12px;
       color: #fff;
       font-size: 15px;
@@ -296,10 +221,10 @@ function renderAdminDashboardHtml() {
       align-items: center;
       justify-content: center;
       gap: 8px;
-      padding: 11px 20px;
+      padding: 12px 20px;
       border-radius: 12px;
       font-weight: 600;
-      font-size: 13px;
+      font-size: 14px;
       border: none;
       cursor: pointer;
       transition: all 0.2s ease;
@@ -310,13 +235,9 @@ function renderAdminDashboardHtml() {
       box-shadow: 0 4px 15px var(--primary-glow);
     }
     .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(99,102,241,0.5); }
-    .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+    .btn-sm { padding: 7px 14px; font-size: 12px; border-radius: 8px; }
     .btn-outline { background: transparent; border: 1px solid rgba(255,255,255,0.15); color: var(--text); }
     .btn-outline:hover { background: rgba(255,255,255,0.05); }
-    .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
-    .btn-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .btn-warning:hover { background: rgba(245, 158, 11, 0.3); }
     
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .stat-card {
@@ -339,10 +260,11 @@ function renderAdminDashboardHtml() {
       background: rgba(99, 102, 241, 0.15);
       border: 1px solid rgba(99, 102, 241, 0.3);
       color: #a5b4fc;
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
     }
     
     .badge-status {
@@ -353,21 +275,16 @@ function renderAdminDashboardHtml() {
       border-radius: 20px;
       font-size: 12px;
       font-weight: 600;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
     }
-    .badge-active { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-revoked { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .badge-device { background: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
-    .badge-available { background: rgba(156, 163, 175, 0.15); color: #d1d5db; border: 1px solid rgba(156, 163, 175, 0.3); }
-    .dot { width: 7px; height: 7px; border-radius: 50%; }
-    .badge-active .dot { background: #34d399; box-shadow: 0 0 8px #34d399; }
-    .badge-revoked .dot { background: #f87171; }
-    .badge-device .dot { background: #22d3ee; }
-    .badge-available .dot { background: #9ca3af; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px #34d399; }
     
-    .action-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .action-group { display: flex; gap: 6px; align-items: center; }
     
     .modal {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
       backdrop-filter: blur(8px); display: none; align-items: center; justify-content: center; z-index: 999;
     }
     .modal-content {
@@ -384,7 +301,7 @@ function renderAdminDashboardHtml() {
         <div class="brand-icon">🚢</div>
         <div>
           <h1>Submarine Control</h1>
-          <p>Sistem Pengendalian Lisensi & Anti-Share (1 Kunci = 1 HP)</p>
+          <p>Sistem Pengendalian Lisensi & Custom Key Generator</p>
         </div>
       </div>
       <div id="adminHeaderActions" style="display:none;">
@@ -392,46 +309,40 @@ function renderAdminDashboardHtml() {
       </div>
     </header>
 
-    <!-- 1. LOGIN PIN SCREEN -->
+    <!-- LOGIN SECTION -->
     <div id="loginSection" class="card">
       <h2 style="margin-bottom:8px; font-size:22px;">Masukkan PIN Admin</h2>
-      <p style="color:var(--text-dim); font-size:14px; margin-bottom:24px;">Masukkan PIN otorisasi (Default: <code>8899</code>) untuk mengelola izin akses.</p>
+      <p style="color:var(--text-dim); font-size:14px; margin-bottom:24px;">Masukkan PIN otorisasi (Default: <code>8899</code>) untuk mengelola kunci akses.</p>
       <div class="input-group">
         <label>PIN Admin</label>
-        <input type="password" id="pinInput" placeholder="Masukkan 4 digit PIN..." onkeydown="if(event.key==='Enter') login()">
+        <input type="password" id="pinInput" placeholder="Ketik 8899..." autofocus onkeydown="if(event.key==='Enter') login()">
       </div>
       <button class="btn btn-primary" style="width:100%;" onclick="login()">Buka Dashboard 🚀</button>
-      <p id="loginError" style="color:var(--danger); font-size:13px; margin-top:12px; display:none;"></p>
+      <p id="loginError" style="color:var(--danger); font-size:13px; margin-top:14px; display:none;"></p>
     </div>
 
-    <!-- 2. MAIN DASHBOARD SCREEN -->
+    <!-- MAIN DASHBOARD -->
     <div id="dashboardSection" style="display:none;">
-      <!-- Stats -->
       <div class="stats-grid">
         <div class="stat-card">
-          <h3>Total Kunci</h3>
+          <h3>Total Kunci Terdaftar</h3>
           <div class="val" id="totalKeysCount">0</div>
         </div>
         <div class="stat-card">
-          <h3>Izin Aktif</h3>
+          <h3>Kunci Aktif (Siap Pakai)</h3>
           <div class="val" id="activeKeysCount" style="color:#34d399;">0</div>
         </div>
         <div class="stat-card">
-          <h3>Terkunci di HP (Used)</h3>
-          <div class="val" id="lockedKeysCount" style="color:#22d3ee;">0</div>
-        </div>
-        <div class="stat-card">
-          <h3>Izin Dicabut</h3>
-          <div class="val" id="revokedKeysCount" style="color:#f87171;">0</div>
+          <h3>Tipe Kunci</h3>
+          <div class="val" style="color:#22d3ee; font-size:20px;">Custom & Crypto</div>
         </div>
       </div>
 
-      <!-- Controls & Table -->
       <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
           <div>
-            <h2 style="font-size:18px; font-weight:700;">Daftar Kunci & Perangkat Teman (Device-Lock)</h2>
-            <p style="color:var(--text-dim); font-size:13px;">Setiap kunci hanya bisa dipakai pada 1 HP. Teman tidak bisa membagikan kodenya ke orang lain.</p>
+            <h2 style="font-size:18px; font-weight:700;">Daftar Kunci Akses Teman</h2>
+            <p style="color:var(--text-dim); font-size:13px;">Kamu bisa membuat kode bebas sesukamu (Contoh: <code>SUB-VIP</code>, <code>SUB-ANDI-KEREN</code>, dll).</p>
           </div>
           <button class="btn btn-primary" onclick="openCreateModal()">+ Buat Kunci Baru</button>
         </div>
@@ -442,9 +353,9 @@ function renderAdminDashboardHtml() {
               <tr>
                 <th>Nama Panggilan</th>
                 <th>Kode Akses</th>
-                <th>Status Izin</th>
-                <th>Status Perangkat (1 HP)</th>
-                <th>Aksi Kelola</th>
+                <th>Status Kunci</th>
+                <th>Tanggal Dibuat</th>
+                <th>Aksi</th>
               </tr>
             </thead>
             <tbody id="keysTableBody">
@@ -456,52 +367,73 @@ function renderAdminDashboardHtml() {
     </div>
   </div>
 
-  <!-- MODAL: BUAT KUNCI BARU -->
+  <!-- MODAL CREATE KEY -->
   <div class="modal" id="createModal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3 style="font-size:18px;">+ Tambah Kunci Akses Baru</h3>
-        <button style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer;" onclick="closeCreateModal()">&times;</button>
+        <h3 style="font-size:18px;">+ Buat Kunci Akses Baru</h3>
+        <button style="background:none; border:none; color:#fff; font-size:24px; cursor:pointer;" onclick="closeCreateModal()">&times;</button>
       </div>
       <div class="input-group">
         <label>Nama Panggilan Teman</label>
-        <input type="text" id="newKeyName" placeholder="Contoh: Budi, Ghazi, Andi...">
+        <input type="text" id="newKeyName" placeholder="Contoh: ANDI, GHAZI, BUDI...">
       </div>
       <div class="input-group">
-        <label>Kode Kunci Kustom (Opsional)</label>
-        <input type="text" id="newKeyCode" placeholder="Biarkan kosong untuk auto-generate (SUB-XXXX-YYYY)">
+        <label>Kode Kunci Kustom (Bebas / Sesukamu)</label>
+        <input type="text" id="newKeyCode" placeholder="Contoh: SUB-VIP, SUB-ANDI-123 (Kosongkan jika ingin auto)">
+      </div>
+      <div style="background:rgba(99,102,241,0.1); border:1px solid rgba(99,102,241,0.25); border-radius:10px; padding:12px; font-size:12px; color:#a5b4fc; line-height:1.4;">
+        💡 Kamu bebas menentukan format kode kunci apa saja sesuai keinginanmu!
       </div>
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
         <button class="btn btn-outline" onclick="closeCreateModal()">Batal</button>
-        <button class="btn btn-primary" onclick="submitCreateKey()">Buat Kunci 🔑</button>
+        <button class="btn btn-primary" onclick="submitCreateKey()">Simpan Kunci 🔑</button>
       </div>
     </div>
   </div>
 
   <script>
-    const DEFAULT_PIN = "8899";
-    let adminPin = localStorage.getItem("sub_admin_pin") || "";
-    let keysList = JSON.parse(localStorage.getItem("sub_local_keys") || "null") || [
-      { code: "SUB-VIP-MASTER", name: "Tobi Admin", active: true, boundDeviceId: null, createdAt: "2026-08-22" },
-      { code: "SUB-ANDI-9281", name: "Andi Kampus", active: true, boundDeviceId: "DEV-M39K-123456", createdAt: "2026-08-22" },
-      { code: "SUB-BUDI-3142", name: "Budi Rekan", active: false, boundDeviceId: null, createdAt: "2026-08-22" },
+    var DEFAULT_PIN = "8899";
+
+    function safeGet(k) {
+      try { return localStorage.getItem(k); } catch(e) { return null; }
+    }
+    function safeSet(k, v) {
+      try { localStorage.setItem(k, v); } catch(e) {}
+    }
+
+    var defaultKeysList = [
+      { code: "SUB-VIP", name: "TOBI VIP", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-TOBI-D705EE", name: "TOBI", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-ANDI-958D09", name: "ANDI", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-GHAZI-A5AF49", name: "GHAZI", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-BUDI-5AD569", name: "BUDI", active: true, createdAt: "2026-08-22" }
     ];
 
-    window.onload = () => {
-      if (adminPin === DEFAULT_PIN) {
+    var stored = safeGet("sub_crypto_keys");
+    var keysList = stored ? JSON.parse(stored) : defaultKeysList;
+
+    window.onload = function() {
+      var savedPin = safeGet("sub_admin_pin");
+      if (savedPin === DEFAULT_PIN) {
         showDashboard();
       }
     };
 
     function login() {
-      const pin = document.getElementById("pinInput").value.trim();
-      if (pin === DEFAULT_PIN) {
-        adminPin = pin;
-        localStorage.setItem("sub_admin_pin", adminPin);
+      var pinEl = document.getElementById("pinInput");
+      var errEl = document.getElementById("loginError");
+      var val = (pinEl ? pinEl.value : "").trim();
+
+      if (val === DEFAULT_PIN) {
+        if (errEl) errEl.style.display = "none";
+        safeSet("sub_admin_pin", val);
         showDashboard();
       } else {
-        document.getElementById("loginError").innerText = "PIN Salah! Default PIN adalah: 8899";
-        document.getElementById("loginError").style.display = "block";
+        if (errEl) {
+          errEl.innerHTML = "<strong>PIN Salah!</strong> Masukkan 4 digit PIN: <code>8899</code>";
+          errEl.style.display = "block";
+        }
       }
     }
 
@@ -513,99 +445,91 @@ function renderAdminDashboardHtml() {
     }
 
     function logout() {
-      adminPin = "";
-      localStorage.removeItem("sub_admin_pin");
+      safeSet("sub_admin_pin", "");
       document.getElementById("dashboardSection").style.display = "none";
       document.getElementById("adminHeaderActions").style.display = "none";
       document.getElementById("loginSection").style.display = "block";
-      document.getElementById("pinInput").value = "";
+      var pinEl = document.getElementById("pinInput");
+      if (pinEl) pinEl.value = "";
     }
 
     function saveLocal() {
-      localStorage.setItem("sub_local_keys", JSON.stringify(keysList));
+      safeSet("sub_crypto_keys", JSON.stringify(keysList));
       renderTable();
     }
 
     function renderTable() {
-      const tbody = document.getElementById("keysTableBody");
+      var tbody = document.getElementById("keysTableBody");
+      if (!tbody) return;
       tbody.innerHTML = "";
 
-      let activeCount = 0;
-      let revokedCount = 0;
-      let lockedCount = 0;
+      var activeCount = 0;
 
       if (keysList.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-dim);">Belum ada kunci dibuat. Klik tombol "+ Buat Kunci Baru" di atas.</td></tr>';
       } else {
-        keysList.forEach(k => {
-          if (k.active) activeCount++; else revokedCount++;
-          if (k.boundDeviceId) lockedCount++;
+        keysList.forEach(function(k) {
+          if (k.active) activeCount++;
 
-          const tr = document.createElement("tr");
+          var tr = document.createElement("tr");
 
-          const statusBadge = k.active 
-            ? '<span class="badge-status badge-active"><span class="dot"></span> AKTIF</span>'
-            : '<span class="badge-status badge-revoked"><span class="dot"></span> DICABUT</span>';
+          var tdName = document.createElement("td");
+          tdName.innerHTML = "<strong>" + escapeHtml(k.name) + "</strong>";
 
-          const deviceBadge = k.boundDeviceId
-            ? \`<span class="badge-status badge-device"><span class="dot"></span> 🔒 Terikat di HP (\${escapeHtml(k.boundDeviceId.substring(0, 10))}...)</span>\`
-            : '<span class="badge-status badge-available"><span class="dot"></span> 🔓 Belum Dipakai (Siap Dibagi)</span>';
+          var tdCode = document.createElement("td");
+          tdCode.innerHTML = '<span class="code-badge">' + escapeHtml(k.code) + '</span>';
+          var copyIconBtn = document.createElement("button");
+          copyIconBtn.style.cssText = "background:none; border:none; color:var(--accent); cursor:pointer; margin-left:8px; font-size:16px;";
+          copyIconBtn.title = "Copy Kunci";
+          copyIconBtn.innerText = "📋";
+          copyIconBtn.onclick = function() { copyText(k.code); };
+          tdCode.appendChild(copyIconBtn);
 
-          const toggleBtn = k.active
-            ? \`<button class="btn btn-danger btn-sm" onclick="toggleKey('\${k.code}')">🛑 Cabut Izin</button>\`
-            : \`<button class="btn btn-primary btn-sm" style="background:#10b981;" onclick="toggleKey('\${k.code}')">✅ Hidupkan</button>\`;
+          var tdStatus = document.createElement("td");
+          tdStatus.innerHTML = '<span class="badge-status"><span class="dot"></span> VALID & SIAP PAKAI</span>';
 
-          const resetDeviceBtn = k.boundDeviceId
-            ? \`<button class="btn btn-warning btn-sm" title="Buka Kunci HP jika teman ganti HP" onclick="resetDevice('\${k.code}')">🔄 Reset HP</button>\`
-            : '';
+          var tdDate = document.createElement("td");
+          tdDate.style.cssText = "color:var(--text-dim); font-size:13px;";
+          tdDate.innerText = k.createdAt || "-";
 
-          tr.innerHTML = \`
-            <td><strong>\${escapeHtml(k.name)}</strong></td>
-            <td>
-              <span class="code-badge">\${escapeHtml(k.code)}</span>
-              <button style="background:none; border:none; color:var(--accent); cursor:pointer; margin-left:6px;" title="Copy Kunci" onclick="copyText('\${k.code}')">📋</button>
-            </td>
-            <td>\${statusBadge}</td>
-            <td>\${deviceBadge}</td>
-            <td>
-              <div class="action-group">
-                \${toggleBtn}
-                \${resetDeviceBtn}
-                <button class="btn btn-outline btn-sm" style="color:#f87171;" title="Hapus Permanen" onclick="deleteKey('\${k.code}')">🗑️</button>
-              </div>
-            </td>
-          \`;
+          var tdAction = document.createElement("td");
+          var actionGroup = document.createElement("div");
+          actionGroup.className = "action-group";
+
+          var copyBtn = document.createElement("button");
+          copyBtn.className = "btn btn-primary btn-sm";
+          copyBtn.innerText = "Salin Kunci 📋";
+          copyBtn.onclick = function() { copyText(k.code); };
+
+          var delBtn = document.createElement("button");
+          delBtn.className = "btn btn-outline btn-sm";
+          delBtn.style.color = "#f87171";
+          delBtn.innerText = "🗑️";
+          delBtn.onclick = function() { deleteKey(k.code); };
+
+          actionGroup.appendChild(copyBtn);
+          actionGroup.appendChild(delBtn);
+          tdAction.appendChild(actionGroup);
+
+          tr.appendChild(tdName);
+          tr.appendChild(tdCode);
+          tr.appendChild(tdStatus);
+          tr.appendChild(tdDate);
+          tr.appendChild(tdAction);
+
           tbody.appendChild(tr);
         });
       }
 
-      document.getElementById("totalKeysCount").innerText = keysList.length;
-      document.getElementById("activeKeysCount").innerText = activeCount;
-      document.getElementById("lockedKeysCount").innerText = lockedCount;
-      document.getElementById("revokedKeysCount").innerText = revokedCount;
-    }
-
-    function toggleKey(code) {
-      const key = keysList.find(k => k.code === code);
-      if (key) {
-        key.active = !key.active;
-        saveLocal();
-      }
-    }
-
-    function resetDevice(code) {
-      const key = keysList.find(k => k.code === code);
-      if (key) {
-        if (!confirm("Reset Device Lock untuk " + key.name + "? Kode ini akan bisa diaktivasi lagi di HP baru.")) return;
-        key.boundDeviceId = null;
-        saveLocal();
-        alert("Device lock berhasil direset!");
-      }
+      var totalEl = document.getElementById("totalKeysCount");
+      if (totalEl) totalEl.innerText = keysList.length;
+      var activeEl = document.getElementById("activeKeysCount");
+      if (activeEl) activeEl.innerText = activeCount;
     }
 
     function deleteKey(code) {
-      if (!confirm("Hapus kunci " + code + " secara permanen?")) return;
-      keysList = keysList.filter(k => k.code !== code);
+      if (!confirm("Hapus kunci " + code + "?")) return;
+      keysList = keysList.filter(function(k) { return k.code !== code; });
       saveLocal();
     }
 
@@ -619,36 +543,38 @@ function renderAdminDashboardHtml() {
       document.getElementById("createModal").style.display = "none";
     }
 
-    function submitCreateKey() {
-      const name = document.getElementById("newKeyName").value.trim();
-      let code = document.getElementById("newKeyCode").value.trim().toUpperCase().replace(/\s+/g, '');
-      if (!name) { alert("Masukkan nama teman!"); return; }
+    async function submitCreateKey() {
+      var rawName = document.getElementById("newKeyName").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+      var customCode = document.getElementById("newKeyCode").value.trim().toUpperCase().replace(/\\s+/g, "");
 
+      if (!rawName) { alert("Masukkan nama teman!"); return; }
+
+      var code = customCode;
       if (!code) {
-        const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
-        code = `SUB-${name.substring(0, 4).toUpperCase()}-${rand}`;
+        var rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+        code = "SUB-" + rawName + "-" + rand;
       }
 
-      if (keysList.some(k => k.code === code)) {
-        alert("Kode kunci sudah ada!");
+      if (keysList.some(function(k) { return k.code === code; })) {
+        alert("Kunci untuk nama ini sudah ada: " + code);
         return;
       }
 
       keysList.unshift({
-        code,
-        name,
+        code: code,
+        name: rawName,
         active: true,
-        boundDeviceId: null,
         createdAt: new Date().toISOString().split("T")[0]
       });
 
       saveLocal();
       closeCreateModal();
+      copyText(code);
     }
 
     function copyText(text) {
       navigator.clipboard.writeText(text);
-      alert("Kode kunci " + text + " berhasil disalin ke clipboard!");
+      alert("✅ Kunci Akses: " + text + "\\nBerhasil disalin ke clipboard! Silakan kirimkan ke temanmu.");
     }
 
     function escapeHtml(str) {
@@ -657,4 +583,3 @@ function renderAdminDashboardHtml() {
   </script>
 </body>
 </html>`;
-}

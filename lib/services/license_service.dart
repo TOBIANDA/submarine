@@ -27,13 +27,12 @@ class LicenseService {
   LicenseService._();
   factory LicenseService() => _instance ??= LicenseService._();
 
-  // Flag compile-time: Jika dibuild dengan --dart-define=VIP_BUILD=true maka bebas kunci selamanya
   static const bool isVipBuild = bool.fromEnvironment('VIP_BUILD', defaultValue: false);
 
-  // Cloudflare License Endpoint (Opsional / Background sync)
-  static const String licenseEndpoint = 'https://submarine-keys.workers.dev/api/verify';
+  // Cloudflare License Endpoint
+  static const String licenseEndpoint = 'https://submarinekey.kuahsayurgaming9.workers.dev/api/verify';
 
-  // Obfuscated Salt for Cryptographic Signature & Serial Key Checksum
+  // Obfuscated Salt for Cryptographic Signature
   static String get _signatureSalt {
     final saltBytes = [83, 117, 98, 77, 97, 114, 105, 110, 101, 95, 83, 101, 99, 117, 114, 101, 95, 50, 48, 50, 54, 95, 83, 97, 108, 116];
     return String.fromCharCodes(saltBytes);
@@ -44,7 +43,6 @@ class LicenseService {
   static const String _prefKeyName = 'sub_license_name';
   static const String _prefKeyDeviceId = 'sub_device_id';
 
-  /// Dapatkan atau buat Device ID unik untuk HP ini
   Future<String> getOrCreateDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
     String? devId = prefs.getString(_prefKeyDeviceId);
@@ -56,14 +54,11 @@ class LicenseService {
     return devId;
   }
 
-  /// Generate SHA-256 Digital Signature terikat ke DeviceID & Kode Kunci
   String _generateSignature(String deviceId, String code) {
     final raw = '$deviceId:$code:$_signatureSalt';
     return sha256.convert(utf8.encode(raw)).toString();
   }
 
-  /// Validasi Kriptografi Matematika Checksum Serial Key (HMAC / SHA-256)
-  /// Format Serial yang sah dari Dashboard: SUB-<NAMA>-<6-CHAR-CHECKSUM>
   bool _validateChecksum(String code) {
     final clean = code.trim().toUpperCase().replaceAll(' ', '');
     final parts = clean.split('-');
@@ -84,10 +79,9 @@ class LicenseService {
     if (parts.length >= 2 && parts[0] == 'SUB') {
       return parts[1];
     }
-    return 'Pengguna';
+    return 'Pengguna Submarine';
   }
 
-  /// Cek apakah aplikasi saat ini dalam status teraktivasi secara sah (Anti-Tamper)
   Future<bool> isActivated() async {
     if (isVipBuild) return true;
 
@@ -100,17 +94,9 @@ class LicenseService {
       return false;
     }
 
-    // 1. Validasi Digital Signature: Mencegah manipulasi SharedPreferences / file XML
     final expectedSig = _generateSignature(deviceId, code);
     if (storedSig != expectedSig) {
-      debugPrint('[Security] Digital signature mismatch! Tamper detected, locking app.');
-      await revokeLocally();
-      return false;
-    }
-
-    // 2. Validasi Kriptografi Serial Key
-    if (!_validateChecksum(code)) {
-      debugPrint('[Security] Invalid serial key checksum detected.');
+      debugPrint('[Security] Digital signature mismatch! Locking app.');
       await revokeLocally();
       return false;
     }
@@ -118,21 +104,19 @@ class LicenseService {
     return true;
   }
 
-  /// Ambil nama pemegang lisensi saat ini
   Future<String> getLicenseHolderName() async {
     if (isVipBuild) return 'VIP Master Account';
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_prefKeyName) ?? 'Pengguna Submarine';
   }
 
-  /// Ambil kode lisensi saat ini
   Future<String?> getActiveLicenseCode() async {
     if (isVipBuild) return 'VIP-UNLIMITED';
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_prefKeyCode);
   }
 
-  /// Verifikasi kode akses dengan Kriptografi Checksum + Device-Lock
+  /// Verifikasi kode akses: Cek Cloudflare Server & Kriptografi
   Future<LicenseVerificationResult> verifyAndActivate(String rawCode) async {
     final code = rawCode.trim().toUpperCase().replaceAll(' ', '');
     if (code.isEmpty) {
@@ -145,27 +129,14 @@ class LicenseService {
 
     final deviceId = await getOrCreateDeviceId();
 
-    // 1. Validasi Kriptografi Serial Key (Resmi dari Dashboard Admin)
-    if (_validateChecksum(code)) {
-      final userName = _extractNameFromCode(code);
-      await _saveActivationWithSignature(deviceId, code, userName);
-
-      return LicenseVerificationResult(
-        isValid: true,
-        isActive: true,
-        userName: userName,
-        code: code,
-      );
-    }
-
-    // 2. Jika format custom, coba verifikasi ke server jika terhubung
+    // 1. Cek langsung ke Cloudflare Server (Mendukung custom code apa saja dari Dashboard)
     try {
       final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}&deviceId=${Uri.encodeComponent(deviceId)}');
-      final response = await http.get(uri).timeout(const Duration(seconds: 4));
+      final response = await http.get(uri).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final name = data['name']?.toString() ?? 'Pengguna Submarine';
+        final name = data['name']?.toString() ?? _extractNameFromCode(code);
         await _saveActivationWithSignature(deviceId, code, name);
 
         return LicenseVerificationResult(
@@ -179,19 +150,44 @@ class LicenseService {
         return LicenseVerificationResult(
           isValid: true,
           isActive: false,
-          errorMessage: data['error']?.toString() ?? 'Kunci ini telah dicabut atau terkunci di perangkat lain.',
+          errorMessage: data['error']?.toString() ?? 'Kunci ini telah dicabut oleh admin.',
         );
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[License] Cloud API check: $e');
+    }
+
+    // 2. Cek Kriptografi Checksum Offline
+    if (_validateChecksum(code)) {
+      final userName = _extractNameFromCode(code);
+      await _saveActivationWithSignature(deviceId, code, userName);
+
+      return LicenseVerificationResult(
+        isValid: true,
+        isActive: true,
+        userName: userName,
+        code: code,
+      );
+    }
+
+    // 3. Cek Default VIP Master Code
+    if (code == 'SUB-VIP' || code == 'SUB-VIP-MASTER') {
+      await _saveActivationWithSignature(deviceId, code, 'VIP Member');
+      return LicenseVerificationResult(
+        isValid: true,
+        isActive: true,
+        userName: 'VIP Member',
+        code: code,
+      );
+    }
 
     return LicenseVerificationResult(
       isValid: false,
       isActive: false,
-      errorMessage: 'Kode akses tidak valid atau salah. Minta kode resmi dari Dashboard Admin (contoh: SUB-ANDI-958D09).',
+      errorMessage: 'Kode akses salah. Masukkan kode resmi dari Dashboard Admin (contoh: SUB-ANDI-958D09 atau SUB-VIP).',
     );
   }
 
-  /// Sinkronisasi berkala di latar belakang (Cek jika izin dicabut di Cloud)
   Future<bool> checkRevokeStatusInBackground() async {
     if (isVipBuild) return true;
 
@@ -204,7 +200,7 @@ class LicenseService {
       return false;
     }
 
-    if (storedSig != _generateSignature(deviceId, code) || !_validateChecksum(code)) {
+    if (storedSig != _generateSignature(deviceId, code)) {
       await revokeLocally();
       return false;
     }
