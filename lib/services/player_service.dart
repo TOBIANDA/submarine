@@ -11,6 +11,7 @@ import '../models/video_item.dart';
 import '../models/play_history.dart';
 import '../services/db_service.dart';
 import '../services/audio_handler.dart';
+import '../services/license_service.dart';
 
 enum RepeatMode { none, all, one }
 
@@ -218,6 +219,11 @@ class PlayerService extends ChangeNotifier {
   }
 
   Future<void> _playCurrent() async {
+    if (!await LicenseService().isActivated()) {
+      debugPrint('[Security] Playback blocked: License not active.');
+      await stop();
+      return;
+    }
     final video = currentVideo;
     if (video == null) return;
 

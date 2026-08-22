@@ -65,6 +65,7 @@ dependencies:
   chewie: ^1.14.1
   miniplayer: ^1.0.1
   flutter_inappwebview: ^6.1.5
+  crypto: ^3.0.7
 dev_dependencies:
   flutter_test:
     sdk: flutter

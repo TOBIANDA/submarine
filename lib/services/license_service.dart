@@ -1,6 +1,7 @@
 ﻿// lib/services/license_service.dart
 import 'dart:convert';
 import 'dart:math';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,15 +33,13 @@ class LicenseService {
   // Cloudflare License Endpoint
   static const String licenseEndpoint = 'https://submarine-keys.workers.dev/api/verify';
 
-  // Master VIP keys yang selalu valid secara offline
-  static const Set<String> _offlineMasterKeys = {
-    'SUB-VIP-MASTER',
-    'SUB-TOBIANDA-VIP',
-    'SUB-DEV-2026',
-    'SUBMARINE-VIP-KEY',
-  };
+  // Obfuscated Internal Salt for SHA-256 Anti-Tamper Digital Signature
+  static String get _signatureSalt {
+    final saltBytes = [83, 117, 98, 77, 97, 114, 105, 110, 101, 95, 83, 101, 99, 117, 114, 101, 95, 50, 48, 50, 54, 95, 83, 97, 108, 116];
+    return String.fromCharCodes(saltBytes);
+  }
 
-  static const String _prefKeyActivated = 'sub_license_activated';
+  static const String _prefKeySignature = 'sub_license_sig';
   static const String _prefKeyCode = 'sub_license_code';
   static const String _prefKeyName = 'sub_license_name';
   static const String _prefKeyDeviceId = 'sub_device_id';
@@ -57,15 +56,30 @@ class LicenseService {
     return devId;
   }
 
-  /// Cek apakah aplikasi saat ini dalam status teraktivasi
+  /// Generate SHA-256 Digital Signature terikat ke DeviceID & Kode Kunci
+  String _generateSignature(String deviceId, String code) {
+    final raw = '$deviceId:$code:$_signatureSalt';
+    return sha256.convert(utf8.encode(raw)).toString();
+  }
+
+  /// Cek apakah aplikasi saat ini dalam status teraktivasi secara sah (Anti-Tamper)
   Future<bool> isActivated() async {
     if (isVipBuild) return true;
 
     final prefs = await SharedPreferences.getInstance();
-    final isAct = prefs.getBool(_prefKeyActivated) ?? false;
     final code = prefs.getString(_prefKeyCode);
+    final storedSig = prefs.getString(_prefKeySignature);
+    final deviceId = prefs.getString(_prefKeyDeviceId);
 
-    if (!isAct || code == null || code.isEmpty) {
+    if (code == null || code.isEmpty || storedSig == null || storedSig.isEmpty || deviceId == null || deviceId.isEmpty) {
+      return false;
+    }
+
+    // Validasi Digital Signature: Mencegah manipulasi SharedPreferences / file XML
+    final expectedSig = _generateSignature(deviceId, code);
+    if (storedSig != expectedSig) {
+      debugPrint('[Security] Digital signature mismatch! Tamper detected, locking app.');
+      await revokeLocally();
       return false;
     }
 
@@ -86,7 +100,7 @@ class LicenseService {
     return prefs.getString(_prefKeyCode);
   }
 
-  /// Verifikasi kode akses baru dengan Device-Lock
+  /// Verifikasi kode akses ke Cloudflare Backend dengan Device-Lock & Validasi Ketat
   Future<LicenseVerificationResult> verifyAndActivate(String rawCode) async {
     final code = rawCode.trim().toUpperCase().replaceAll(' ', '');
     if (code.isEmpty) {
@@ -99,26 +113,17 @@ class LicenseService {
 
     final deviceId = await getOrCreateDeviceId();
 
-    // 1. Cek Offline Master Keys
-    if (_offlineMasterKeys.contains(code)) {
-      await _saveActivation(code, 'VIP Special Member');
-      return LicenseVerificationResult(
-        isValid: true,
-        isActive: true,
-        userName: 'VIP Special Member',
-        code: code,
-      );
-    }
-
-    // 2. Cek Cloudflare Worker Backend API dengan Device-Lock
+    // 1. Validasi ke Cloudflare Server (Wajib Terhubung ke Jaringan)
     try {
       final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}&deviceId=${Uri.encodeComponent(deviceId)}');
-      final response = await http.get(uri).timeout(const Duration(seconds: 6));
+      final response = await http.get(uri).timeout(const Duration(seconds: 7));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final name = data['name']?.toString() ?? 'Pengguna Submarine';
-        await _saveActivation(code, name);
+        
+        // Simpan Tanda Tangan Kriptografi
+        await _saveActivationWithSignature(deviceId, code, name);
 
         return LicenseVerificationResult(
           isValid: true,
@@ -137,50 +142,50 @@ class LicenseService {
         return LicenseVerificationResult(
           isValid: false,
           isActive: false,
-          errorMessage: 'Kode kunci tidak terdaftar. Hubungi Tobi untuk mendapatkan akses.',
+          errorMessage: 'Kode kunci tidak terdaftar. Hubungi Admin untuk meminta kode akses.',
         );
       }
     } catch (e) {
-      debugPrint('[License] Cloud check error: $e');
-    }
-
-    // 3. Fallback jika offline pertama kali
-    if (code.startsWith('SUB-') && code.length >= 8) {
-      final parts = code.split('-');
-      final name = parts.length > 1 ? parts[1] : 'Pengguna';
-      await _saveActivation(code, name);
+      debugPrint('[License] Connection failed: $e');
       return LicenseVerificationResult(
-        isValid: true,
-        isActive: true,
-        userName: name,
-        code: code,
+        isValid: false,
+        isActive: false,
+        errorMessage: 'Gagal terhubung ke server lisensi. Pastikan HP terhubung ke internet untuk aktivasi pertama kali.',
       );
     }
 
     return LicenseVerificationResult(
       isValid: false,
       isActive: false,
-      errorMessage: 'Kode akses tidak valid. Pastikan format benar (contoh: SUB-ANDI-9281).',
+      errorMessage: 'Kode akses tidak valid.',
     );
   }
 
-  /// Sinkronisasi berkala (misal cek apakah admin mencabut izin di background)
+  /// Sinkronisasi berkala di latar belakang (Cek jika izin dicabut di Dashboard)
   Future<bool> checkRevokeStatusInBackground() async {
     if (isVipBuild) return true;
 
     final prefs = await SharedPreferences.getInstance();
     final code = prefs.getString(_prefKeyCode);
-    if (code == null || code.isEmpty) return false;
+    final storedSig = prefs.getString(_prefKeySignature);
+    final deviceId = prefs.getString(_prefKeyDeviceId);
 
-    if (_offlineMasterKeys.contains(code)) return true;
+    if (code == null || code.isEmpty || storedSig == null || deviceId == null) {
+      return false;
+    }
+
+    // Validasi Signature lokal terlebih dahulu
+    if (storedSig != _generateSignature(deviceId, code)) {
+      await revokeLocally();
+      return false;
+    }
 
     try {
-      final deviceId = await getOrCreateDeviceId();
       final uri = Uri.parse('$licenseEndpoint?code=${Uri.encodeComponent(code)}&deviceId=${Uri.encodeComponent(deviceId)}');
       final response = await http.get(uri).timeout(const Duration(seconds: 5));
 
-      if (response.statusCode == 403) {
-        // Dicabut atau device tidak cocok!
+      if (response.statusCode == 403 || response.statusCode == 404) {
+        // Izin dicabut oleh admin di dashboard!
         await revokeLocally();
         return false;
       }
@@ -189,15 +194,17 @@ class LicenseService {
     return true;
   }
 
-  Future<void> _saveActivation(String code, String name) async {
+  Future<void> _saveActivationWithSignature(String deviceId, String code, String name) async {
+    final sig = _generateSignature(deviceId, code);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_prefKeyActivated, true);
+    await prefs.setString(_prefKeySignature, sig);
     await prefs.setString(_prefKeyCode, code);
     await prefs.setString(_prefKeyName, name);
   }
 
   Future<void> revokeLocally() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_prefKeyActivated, false);
+    await prefs.remove(_prefKeySignature);
+    await prefs.remove(_prefKeyCode);
   }
 }
