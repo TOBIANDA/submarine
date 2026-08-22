@@ -3,24 +3,32 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../core/app_constants.dart';
+import '../models/video_item.dart';
 
 class AiCurationResult {
   final String message;
   final List<String> queries;
+  final List<String> reasons;
 
-  AiCurationResult({required this.message, required this.queries});
+  AiCurationResult({
+    required this.message,
+    required this.queries,
+    List<String>? reasons,
+  }) : reasons = reasons ?? List.generate(queries.length, (i) => 'Direkomendasikan AI');
 }
 
 class AiEditResult {
   final String message;
   final List<int> keepIndices;
-  final List<String> newQueries;
+  final List<String> newSongQueries;
+  final List<String> newSongReasons;
 
   AiEditResult({
     required this.message,
     required this.keepIndices,
-    required this.newQueries,
-  });
+    required this.newSongQueries,
+    List<String>? newSongReasons,
+  }) : newSongReasons = newSongReasons ?? List.generate(newSongQueries.length, (i) => 'Ditambahkan AI');
 }
 
 class AiService {
@@ -28,9 +36,14 @@ class AiService {
   AiService._();
   factory AiService() => _instance ??= AiService._();
 
-  /// Curate a new playlist from user prompt
-  Future<AiCurationResult> curatePlaylist(String prompt, {int songCount = 15}) async {
-    final userMsg = 'Buatkan playlist dengan tema/deskripsi berikut: "$prompt"\nJumlah lagu: $songCount';
+  /// Curate a new playlist from user prompt (supports both count: and songCount:)
+  Future<AiCurationResult> curatePlaylist(
+    String prompt, {
+    int? count,
+    int? songCount,
+  }) async {
+    final numSongs = count ?? songCount ?? 15;
+    final userMsg = 'Buatkan playlist dengan tema/deskripsi berikut: "$prompt"\nJumlah lagu: $numSongs';
 
     final rawJson = await _callGroq(
       system: AppConstants.curateSystemPrompt,
@@ -41,12 +54,22 @@ class AiService {
     return _parseCurationResponse(rawJson);
   }
 
-  /// Reorder an existing playlist
-  Future<List<int>> reorderPlaylist({
-    required List<String> songTitles,
-    required String instruction,
-  }) async {
-    final titlesList = songTitles.asMap().entries.map((e) => '${e.key}: ${e.value}').join('\n');
+  /// Reorder an existing playlist (supports positional or named arguments)
+  Future<List<int>> reorderPlaylist(
+    dynamic songsOrTitles, [
+    String? instructionPositional,
+  ]) async {
+    final List<String> titles;
+    if (songsOrTitles is List<VideoItem>) {
+      titles = songsOrTitles.map((v) => v.title).toList();
+    } else if (songsOrTitles is List) {
+      titles = songsOrTitles.map((e) => e.toString()).toList();
+    } else {
+      titles = [];
+    }
+
+    final instruction = instructionPositional ?? '';
+    final titlesList = titles.asMap().entries.map((e) => '${e.key}: ${e.value}').join('\n');
     final userMsg = 'Daftar lagu saat ini:\n$titlesList\n\nInstruksi pengurutan: "$instruction"';
 
     final rawJson = await _callGroq(
@@ -55,15 +78,25 @@ class AiService {
       maxTokens: 500,
     );
 
-    return _parseReorderResponse(rawJson, songTitles.length);
+    return _parseReorderResponse(rawJson, titles.length);
   }
 
-  /// Edit/modify an existing playlist
-  Future<AiEditResult> editPlaylist({
-    required List<String> currentSongs,
-    required String instruction,
-  }) async {
-    final songList = currentSongs.asMap().entries.map((e) => '[Index ${e.key}] ${e.value}').join('\n');
+  /// Edit/modify an existing playlist (supports positional or named arguments)
+  Future<AiEditResult> editPlaylist(
+    dynamic songsOrTitles, [
+    String? instructionPositional,
+  ]) async {
+    final List<String> titles;
+    if (songsOrTitles is List<VideoItem>) {
+      titles = songsOrTitles.map((v) => '${v.title} - ${v.channelTitle}').toList();
+    } else if (songsOrTitles is List) {
+      titles = songsOrTitles.map((e) => e.toString()).toList();
+    } else {
+      titles = [];
+    }
+
+    final instruction = instructionPositional ?? '';
+    final songList = titles.asMap().entries.map((e) => '[Index ${e.key}] ${e.value}').join('\n');
     final userMsg = 'Playlist saat ini:\n$songList\n\nInstruksi edit: "$instruction"';
 
     final rawJson = await _callGroq(
@@ -72,7 +105,7 @@ class AiService {
       maxTokens: 1500,
     );
 
-    return _parseEditResponse(rawJson, currentSongs.length);
+    return _parseEditResponse(rawJson, titles.length);
   }
 
   /// Multi-Key Round-Robin & Multi-Model resilient Groq API Caller
@@ -126,7 +159,7 @@ class AiService {
       }
     }
 
-    throw Exception('Semua kunci AI dan model cadangan sedang sibuk. Silakan coba lagi sebentar lagi: $lastError');
+    throw Exception('Semua kunci AI dan model cadangan sedang sibuk. Silakan coba lagi: $lastError');
   }
 
   AiCurationResult _parseCurationResponse(String raw) {
@@ -137,15 +170,27 @@ class AiService {
       final message = data['message'] as String? ?? 'Playlist berhasil dibuat';
       final resultsList = data['results'] as List<dynamic>? ?? [];
 
-      final queries = resultsList
-          .map((item) {
-            if (item is Map) return item['query']?.toString() ?? '';
-            return item.toString();
-          })
-          .where((q) => q.isNotEmpty)
-          .toList();
+      final queries = <String>[];
+      final reasons = <String>[];
 
-      return AiCurationResult(message: message, queries: queries);
+      for (final item in resultsList) {
+        if (item is Map) {
+          final q = item['query']?.toString() ?? '';
+          final r = item['reason']?.toString() ?? 'Pilihan AI';
+          if (q.isNotEmpty) {
+            queries.add(q);
+            reasons.add(r);
+          }
+        } else {
+          final q = item.toString();
+          if (q.isNotEmpty) {
+            queries.add(q);
+            reasons.add('Pilihan AI');
+          }
+        }
+      }
+
+      return AiCurationResult(message: message, queries: queries, reasons: reasons);
     } catch (e) {
       debugPrint('[AI] Parse curation error: $e, raw: $raw');
       final lines = raw
@@ -158,6 +203,7 @@ class AiService {
       return AiCurationResult(
         message: 'Playlist berhasil dikurasi oleh AI',
         queries: lines.isNotEmpty ? lines : ['top pop hits official audio'],
+        reasons: List.generate(lines.length, (_) => 'Rekomendasi AI'),
       );
     }
   }
@@ -187,24 +233,37 @@ class AiService {
           List.generate(currentCount, (i) => i);
 
       final newSongsList = data['new_songs'] as List<dynamic>? ?? [];
-      final newQueries = newSongsList
-          .map((item) {
-            if (item is Map) return item['query']?.toString() ?? '';
-            return item.toString();
-          })
-          .where((q) => q.isNotEmpty)
-          .toList();
+      final newQueries = <String>[];
+      final newReasons = <String>[];
+
+      for (final item in newSongsList) {
+        if (item is Map) {
+          final q = item['query']?.toString() ?? '';
+          final r = item['reason']?.toString() ?? 'Ditambahkan AI';
+          if (q.isNotEmpty) {
+            newQueries.add(q);
+            newReasons.add(r);
+          }
+        } else {
+          final q = item.toString();
+          if (q.isNotEmpty) {
+            newQueries.add(q);
+            newReasons.add('Ditambahkan AI');
+          }
+        }
+      }
 
       return AiEditResult(
         message: message,
         keepIndices: keepList,
-        newQueries: newQueries,
+        newSongQueries: newQueries,
+        newSongReasons: newReasons,
       );
     } catch (e) {
       return AiEditResult(
         message: 'Playlist diperbarui',
         keepIndices: List.generate(currentCount, (i) => i),
-        newQueries: [],
+        newSongQueries: [],
       );
     }
   }
