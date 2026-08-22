@@ -38,7 +38,6 @@ class MainActivity: AudioServiceActivity() {
                 override fun execute(request: NewPipeRequest): NewPipeResponse {
                     val builder = Request.Builder().url(request.url())
                     
-                    // Add headers
                     for ((key, value) in request.headers()) {
                         builder.addHeader(key, value.joinToString(","))
                     }
@@ -133,14 +132,19 @@ class MainActivity: AudioServiceActivity() {
                             
                             val audioStreams = extractor.audioStreams
                             if (audioStreams.isNotEmpty()) {
-                                // Sort by average bitrate or format (prefer m4a)
-                                val bestStream = audioStreams.maxByOrNull { it.averageBitrate } ?: audioStreams[0]
-                                val streamUrl = bestStream.content
-                                val formatName = bestStream.getFormat()?.getName() ?: "m4a"
+                                // Prioritize M4A (itag 140 / AAC) for seamless Android ExoPlayer playback without silent gaps
+                                val m4aStream = audioStreams.firstOrNull { 
+                                    it.getFormat()?.getName()?.contains("m4a", ignoreCase = true) == true ||
+                                    it.itag == 140
+                                }
+                                val chosenStream = m4aStream ?: audioStreams.maxByOrNull { it.averageBitrate } ?: audioStreams[0]
+                                val streamUrl = chosenStream.content
+                                val formatName = chosenStream.getFormat()?.getName() ?: "m4a"
+                                
                                 withContext(Dispatchers.Main) {
                                     result.success(mapOf(
                                         "url" to streamUrl,
-                                        "bitrate" to bestStream.averageBitrate,
+                                        "bitrate" to chosenStream.averageBitrate,
                                         "format" to formatName
                                     ))
                                 }

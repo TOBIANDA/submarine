@@ -11,9 +11,12 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer(
     audioLoadConfiguration: const AudioLoadConfiguration(
       androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 15),
-        maxBufferDuration: Duration(seconds: 60),
-        prioritizeTimeOverSizeThresholds: true,
+        minBufferDuration: Duration(seconds: 20),
+        maxBufferDuration: Duration(seconds: 120),
+        bufferForPlaybackDuration: Duration(milliseconds: 1000),
+        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 2000),
+        prioritizeTimeOverSizeThresholds: false,
+        backBufferDuration: Duration(seconds: 30),
       ),
     ),
   );
@@ -131,6 +134,8 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
           Uri.parse(streamUrl),
           headers: const {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Encoding': 'identity',
+            'Connection': 'keep-alive',
           },
         ),
         preload: true,
