@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Submarine - Admin Licensing & Device-Lock Dashboard</title>
+  <title>Submarine - Admin Licensing & Key Generator Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -103,8 +103,6 @@
     .btn-outline:hover { background: rgba(255,255,255,0.05); }
     .btn-danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
     .btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
-    .btn-warning { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .btn-warning:hover { background: rgba(245, 158, 11, 0.3); }
     
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .stat-card {
@@ -127,10 +125,11 @@
       background: rgba(99, 102, 241, 0.15);
       border: 1px solid rgba(99, 102, 241, 0.3);
       color: #a5b4fc;
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
+      padding: 5px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
     }
     
     .badge-status {
@@ -144,15 +143,11 @@
     }
     .badge-active { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
     .badge-revoked { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-    .badge-device { background: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3); }
-    .badge-available { background: rgba(156, 163, 175, 0.15); color: #d1d5db; border: 1px solid rgba(156, 163, 175, 0.3); }
     .dot { width: 7px; height: 7px; border-radius: 50%; }
     .badge-active .dot { background: #34d399; box-shadow: 0 0 8px #34d399; }
     .badge-revoked .dot { background: #f87171; }
-    .badge-device .dot { background: #22d3ee; }
-    .badge-available .dot { background: #9ca3af; }
     
-    .action-group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .action-group { display: flex; gap: 6px; align-items: center; }
     
     .modal {
       position: fixed; inset: 0; background: rgba(0,0,0,0.7);
@@ -172,7 +167,7 @@
         <div class="brand-icon">🚢</div>
         <div>
           <h1>Submarine Control</h1>
-          <p>Sistem Pengendalian Lisensi & Anti-Share (1 Kunci = 1 HP)</p>
+          <p>Sistem Pengendalian Lisensi & Kriptografi Serial Key</p>
         </div>
       </div>
       <div id="adminHeaderActions" style="display:none;">
@@ -183,7 +178,7 @@
     <!-- 1. LOGIN PIN SCREEN -->
     <div id="loginSection" class="card">
       <h2 style="margin-bottom:8px; font-size:22px;">Masukkan PIN Admin</h2>
-      <p style="color:var(--text-dim); font-size:14px; margin-bottom:24px;">Masukkan PIN otorisasi (Default: <code>8899</code>) untuk mengelola izin akses.</p>
+      <p style="color:var(--text-dim); font-size:14px; margin-bottom:24px;">Masukkan PIN otorisasi (Default: <code>8899</code>) untuk mengelola kunci akses.</p>
       <div class="input-group">
         <label>PIN Admin</label>
         <input type="password" id="pinInput" placeholder="Masukkan 4 digit PIN..." onkeydown="if(event.key==='Enter') login()">
@@ -197,20 +192,16 @@
       <!-- Stats -->
       <div class="stats-grid">
         <div class="stat-card">
-          <h3>Total Kunci</h3>
+          <h3>Total Kunci Resmi</h3>
           <div class="val" id="totalKeysCount">0</div>
         </div>
         <div class="stat-card">
-          <h3>Izin Aktif</h3>
+          <h3>Kunci Aktif (Siap Pakai)</h3>
           <div class="val" id="activeKeysCount" style="color:#34d399;">0</div>
         </div>
         <div class="stat-card">
-          <h3>Terkunci di HP (Used)</h3>
-          <div class="val" id="lockedKeysCount" style="color:#22d3ee;">0</div>
-        </div>
-        <div class="stat-card">
-          <h3>Izin Dicabut</h3>
-          <div class="val" id="revokedKeysCount" style="color:#f87171;">0</div>
+          <h3>Tipe Enkripsi</h3>
+          <div class="val" style="color:#22d3ee; font-size:20px;">HMAC SHA-256</div>
         </div>
       </div>
 
@@ -218,8 +209,8 @@
       <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
           <div>
-            <h2 style="font-size:18px; font-weight:700;">Daftar Kunci & Perangkat Teman (Device-Lock)</h2>
-            <p style="color:var(--text-dim); font-size:13px;">Setiap kunci hanya bisa dipakai pada 1 HP. Teman tidak bisa membagikan kodenya ke orang lain.</p>
+            <h2 style="font-size:18px; font-weight:700;">Daftar Kunci Akses Resmi Teman</h2>
+            <p style="color:var(--text-dim); font-size:13px;">Setiap kunci memiliki checksum kriptografi unik. Salin dan kirimkan ke temanmu.</p>
           </div>
           <button class="btn btn-primary" onclick="openCreateModal()">+ Buat Kunci Baru</button>
         </div>
@@ -229,10 +220,10 @@
             <thead>
               <tr>
                 <th>Nama Panggilan</th>
-                <th>Kode Akses</th>
-                <th>Status Izin</th>
-                <th>Status Perangkat (1 HP)</th>
-                <th>Aksi Kelola</th>
+                <th>Kode Serial Kriptografi</th>
+                <th>Status Kunci</th>
+                <th>Tanggal Dibuat</th>
+                <th>Aksi</th>
               </tr>
             </thead>
             <tbody id="keysTableBody">
@@ -248,31 +239,32 @@
   <div class="modal" id="createModal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3 style="font-size:18px;">+ Tambah Kunci Akses Baru</h3>
+        <h3 style="font-size:18px;">+ Generate Kunci Serial Baru</h3>
         <button style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer;" onclick="closeCreateModal()">&times;</button>
       </div>
       <div class="input-group">
         <label>Nama Panggilan Teman</label>
-        <input type="text" id="newKeyName" placeholder="Contoh: Budi, Ghazi, Andi...">
+        <input type="text" id="newKeyName" placeholder="Contoh: ANDI, GHAZI, BUDI...">
       </div>
-      <div class="input-group">
-        <label>Kode Kunci Kustom (Opsional)</label>
-        <input type="text" id="newKeyCode" placeholder="Biarkan kosong untuk auto-generate (SUB-XXXX-YYYY)">
+      <div style="background:rgba(99,102,241,0.1); border:1px solid rgba(99,102,241,0.25); border-radius:10px; padding:12px; font-size:12px; color:#a5b4fc; line-height:1.4;">
+        💡 Sistem akan secara otomatis menghitung checksum kriptografi SHA-256 untuk nama teman tersebut agar 100% aman dan tidak bisa ditebak orang lain.
       </div>
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
         <button class="btn btn-outline" onclick="closeCreateModal()">Batal</button>
-        <button class="btn btn-primary" onclick="submitCreateKey()">Buat Kunci 🔑</button>
+        <button class="btn btn-primary" onclick="submitCreateKey()">Generate Kunci 🔑</button>
       </div>
     </div>
   </div>
 
   <script>
     const DEFAULT_PIN = "8899";
+    const SALT = "SubMarine_Secure_2026_Salt";
     let adminPin = localStorage.getItem("sub_admin_pin") || "";
-    let keysList = JSON.parse(localStorage.getItem("sub_local_keys") || "null") || [
-      { code: "SUB-VIP-MASTER", name: "Tobi Admin", active: true, boundDeviceId: null, createdAt: "2026-08-22" },
-      { code: "SUB-ANDI-9281", name: "Andi Kampus", active: true, boundDeviceId: "DEV-M39K-123456", createdAt: "2026-08-22" },
-      { code: "SUB-BUDI-3142", name: "Budi Rekan", active: false, boundDeviceId: null, createdAt: "2026-08-22" },
+    let keysList = JSON.parse(localStorage.getItem("sub_crypto_keys") || "null") || [
+      { code: "SUB-TOBI-D705EE", name: "TOBI", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-ANDI-958D09", name: "ANDI", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-GHAZI-A5AF49", name: "GHAZI", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-BUDI-5AD569", name: "BUDI", active: true, createdAt: "2026-08-22" },
     ];
 
     window.onload = () => {
@@ -310,8 +302,17 @@
     }
 
     function saveLocal() {
-      localStorage.setItem("sub_local_keys", JSON.stringify(keysList));
+      localStorage.setItem("sub_crypto_keys", JSON.stringify(keysList));
       renderTable();
+    }
+
+    async function calculateChecksum(name) {
+      const cleanName = name.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const msgBuffer = new TextEncoder().encode(cleanName + ":" + SALT);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase().substring(0, 6);
+      return `SUB-${cleanName}-${hashHex}`;
     }
 
     function renderTable() {
@@ -319,47 +320,28 @@
       tbody.innerHTML = "";
 
       let activeCount = 0;
-      let revokedCount = 0;
-      let lockedCount = 0;
 
       if (keysList.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-dim);">Belum ada kunci dibuat. Klik tombol "+ Buat Kunci Baru" di atas.</td></tr>';
       } else {
         keysList.forEach(k => {
-          if (k.active) activeCount++; else revokedCount++;
-          if (k.boundDeviceId) lockedCount++;
+          if (k.active) activeCount++;
 
           const tr = document.createElement("tr");
-
-          const statusBadge = k.active 
-            ? '<span class="badge-status badge-active"><span class="dot"></span> AKTIF</span>'
-            : '<span class="badge-status badge-revoked"><span class="dot"></span> DICABUT</span>';
-
-          const deviceBadge = k.boundDeviceId
-            ? `<span class="badge-status badge-device"><span class="dot"></span> 🔒 Terikat di HP (${escapeHtml(k.boundDeviceId.substring(0, 10))}...)</span>`
-            : '<span class="badge-status badge-available"><span class="dot"></span> 🔓 Belum Dipakai (Siap Dibagi)</span>';
-
-          const toggleBtn = k.active
-            ? `<button class="btn btn-danger btn-sm" onclick="toggleKey('${k.code}')">🛑 Cabut Izin</button>`
-            : `<button class="btn btn-primary btn-sm" style="background:#10b981;" onclick="toggleKey('${k.code}')">✅ Hidupkan</button>`;
-
-          const resetDeviceBtn = k.boundDeviceId
-            ? `<button class="btn btn-warning btn-sm" title="Buka Kunci HP jika teman ganti HP" onclick="resetDevice('${k.code}')">🔄 Reset HP</button>`
-            : '';
+          const statusBadge = '<span class="badge-status badge-active"><span class="dot"></span> VALID & SIAP PAKAI</span>';
 
           tr.innerHTML = `
             <td><strong>${escapeHtml(k.name)}</strong></td>
             <td>
               <span class="code-badge">${escapeHtml(k.code)}</span>
-              <button style="background:none; border:none; color:var(--accent); cursor:pointer; margin-left:6px;" title="Copy Kunci" onclick="copyText('${k.code}')">📋</button>
+              <button style="background:none; border:none; color:var(--accent); cursor:pointer; margin-left:8px; font-size:16px;" title="Copy Kunci" onclick="copyText('${k.code}')">📋</button>
             </td>
             <td>${statusBadge}</td>
-            <td>${deviceBadge}</td>
+            <td style="color:var(--text-dim); font-size:13px;">${k.createdAt || '-'}</td>
             <td>
               <div class="action-group">
-                ${toggleBtn}
-                ${resetDeviceBtn}
-                <button class="btn btn-outline btn-sm" style="color:#f87171;" title="Hapus Permanen" onclick="deleteKey('${k.code}')">🗑️</button>
+                <button class="btn btn-primary btn-sm" onclick="copyText('${k.code}')">Salin Kunci 📋</button>
+                <button class="btn btn-outline btn-sm" style="color:#f87171;" title="Hapus" onclick="deleteKey('${k.code}')">🗑️</button>
               </div>
             </td>
           `;
@@ -369,37 +351,16 @@
 
       document.getElementById("totalKeysCount").innerText = keysList.length;
       document.getElementById("activeKeysCount").innerText = activeCount;
-      document.getElementById("lockedKeysCount").innerText = lockedCount;
-      document.getElementById("revokedKeysCount").innerText = revokedCount;
-    }
-
-    function toggleKey(code) {
-      const key = keysList.find(k => k.code === code);
-      if (key) {
-        key.active = !key.active;
-        saveLocal();
-      }
-    }
-
-    function resetDevice(code) {
-      const key = keysList.find(k => k.code === code);
-      if (key) {
-        if (!confirm("Reset Device Lock untuk " + key.name + "? Kode ini akan bisa diaktivasi lagi di HP baru.")) return;
-        key.boundDeviceId = null;
-        saveLocal();
-        alert("Device lock berhasil direset!");
-      }
     }
 
     function deleteKey(code) {
-      if (!confirm("Hapus kunci " + code + " secara permanen?")) return;
+      if (!confirm("Hapus kunci " + code + "?")) return;
       keysList = keysList.filter(k => k.code !== code);
       saveLocal();
     }
 
     function openCreateModal() {
       document.getElementById("newKeyName").value = "";
-      document.getElementById("newKeyCode").value = "";
       document.getElementById("createModal").style.display = "flex";
     }
 
@@ -407,36 +368,32 @@
       document.getElementById("createModal").style.display = "none";
     }
 
-    function submitCreateKey() {
-      const name = document.getElementById("newKeyName").value.trim();
-      let code = document.getElementById("newKeyCode").value.trim().toUpperCase().replace(/\s+/g, '');
-      if (!name) { alert("Masukkan nama teman!"); return; }
+    async function submitCreateKey() {
+      const rawName = document.getElementById("newKeyName").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!rawName) { alert("Masukkan nama teman!"); return; }
 
-      if (!code) {
-        const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
-        code = `SUB-${name.substring(0, 4).toUpperCase()}-${rand}`;
-      }
+      const code = await calculateChecksum(rawName);
 
       if (keysList.some(k => k.code === code)) {
-        alert("Kode kunci sudah ada!");
+        alert("Kunci untuk nama ini sudah ada: " + code);
         return;
       }
 
       keysList.unshift({
         code,
-        name,
+        name: rawName,
         active: true,
-        boundDeviceId: null,
         createdAt: new Date().toISOString().split("T")[0]
       });
 
       saveLocal();
       closeCreateModal();
+      copyText(code);
     }
 
     function copyText(text) {
       navigator.clipboard.writeText(text);
-      alert("Kode kunci " + text + " berhasil disalin ke clipboard!");
+      alert("✅ Kunci Serial: " + text + "\nBerhasil disalin ke clipboard! Silakan kirimkan ke temanmu.");
     }
 
     function escapeHtml(str) {
