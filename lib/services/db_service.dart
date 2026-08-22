@@ -1,4 +1,5 @@
 ﻿// lib/services/db_service.dart
+import 'dart:async';
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
@@ -132,12 +133,10 @@ class DbService {
       ''');
     }
     if (oldVersion < 4) {
-      // Add completionRate to play_history safely
       try {
         await db.execute('ALTER TABLE play_history ADD COLUMN completionRate REAL NOT NULL DEFAULT 1.0');
       } catch (_) {}
 
-      // Create recommendation_cache table
       await db.execute('''
         CREATE TABLE IF NOT EXISTS recommendation_cache (
           key TEXT PRIMARY KEY,
@@ -151,7 +150,9 @@ class DbService {
 
   // ── Playlists ─────────────────────────────────────────────────────────────
 
-  Future<List<Playlist>> getAllPlaylists() => getPlaylists();`n`n  Future<List<Playlist>> getPlaylists() async {
+  Future<List<Playlist>> getAllPlaylists() => getPlaylists();
+
+  Future<List<Playlist>> getPlaylists() async {
     final db = await database;
     final rows = await db.query('playlists', orderBy: 'createdAt DESC');
     return rows.map(Playlist.fromMap).toList();
