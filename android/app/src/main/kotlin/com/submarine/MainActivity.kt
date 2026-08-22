@@ -22,6 +22,7 @@ import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request as NewPipeRequest
 import org.schabi.newpipe.extractor.downloader.Response as NewPipeResponse
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.io.IOException
 
 class MainActivity: AudioServiceActivity() {
@@ -113,7 +114,7 @@ class MainActivity: AudioServiceActivity() {
             }
         }
 
-        // NewPipeExtractor Stream Channel
+        // NewPipeExtractor Stream Channel & Radio Automix
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, EXTRACTOR_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getAudioStreamUrl" -> {
@@ -160,6 +161,63 @@ class MainActivity: AudioServiceActivity() {
                         }
                     }
                 }
+
+                "getRadioTracks" -> {
+                    val videoId = call.argument<String>("videoId")
+                    val limit = call.argument<Int>("limit") ?: 10
+                    if (videoId.isNullOrEmpty()) {
+                        result.error("INVALID_ID", "Video ID is null or empty", null)
+                        return@setMethodCallHandler
+                    }
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            initNewPipe()
+                            val url = "https://www.youtube.com/watch?v=$videoId"
+                            val extractor = ServiceList.YouTube.getStreamExtractor(url) as YoutubeStreamExtractor
+                            extractor.fetchPage()
+
+                            val list = mutableListOf<Map<String, Any?>>()
+                            val related = extractor.relatedItems
+                            if (related != null && related.items != null) {
+                                for (item in related.items) {
+                                    if (item is StreamInfoItem) {
+                                        val itemUrl = item.url ?: ""
+                                        val vId = if (itemUrl.contains("v=")) {
+                                            itemUrl.substringAfter("v=").substringBefore("&")
+                                        } else if (itemUrl.contains("youtu.be/")) {
+                                            itemUrl.substringAfter("youtu.be/").substringBefore("?")
+                                        } else {
+                                            ""
+                                        }
+
+                                        if (vId.isNotEmpty() && vId != videoId) {
+                                            val thumb = item.thumbnails?.firstOrNull()?.url 
+                                                ?: "https://i.ytimg.com/vi/$vId/hqdefault.jpg"
+                                            list.add(mapOf(
+                                                "videoId" to vId,
+                                                "title" to (item.name ?: "Unknown Title"),
+                                                "channelTitle" to (item.uploaderName ?: "Unknown Artist"),
+                                                "thumbnailUrl" to thumb,
+                                                "durationSeconds" to item.duration.toInt()
+                                            ))
+                                            if (list.size >= limit) break
+                                        }
+                                    }
+                                }
+                            }
+
+                            withContext(Dispatchers.Main) {
+                                result.success(list)
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                result.error("RADIO_ERROR", e.message, null)
+                            }
+                        }
+                    }
+                }
+
                 else -> result.notImplemented()
             }
         }

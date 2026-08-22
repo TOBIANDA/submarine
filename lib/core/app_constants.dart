@@ -51,7 +51,7 @@ class AppConstants {
 
   // ─── DB ────────────────────────────────────
   static const String dbName = 'streamly.db';
-  static const int dbVersion = 3;
+  static const int dbVersion = 4;
 
   // ─── LLM System Prompts ────────────────────
   static const String curateSystemPrompt = '''

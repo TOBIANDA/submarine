@@ -1,4 +1,4 @@
-// lib/models/play_history.dart
+﻿// lib/models/play_history.dart
 import 'video_item.dart';
 
 class PlayHistory {
@@ -10,6 +10,7 @@ class PlayHistory {
   final int durationSeconds;
   final DateTime playedAt;
   final int lastPositionSeconds;
+  final double completionRate;
   final String? playlistId;
 
   PlayHistory({
@@ -21,6 +22,7 @@ class PlayHistory {
     required this.durationSeconds,
     required this.playedAt,
     this.lastPositionSeconds = 0,
+    this.completionRate = 1.0,
     this.playlistId,
   });
 
@@ -32,6 +34,7 @@ class PlayHistory {
         thumbnailUrl: item.thumbnailUrl,
         durationSeconds: item.durationSeconds,
         playedAt: DateTime.now(),
+        completionRate: 1.0,
         playlistId: playlistId,
       );
 
@@ -52,6 +55,7 @@ class PlayHistory {
         'durationSeconds': durationSeconds,
         'playedAt': playedAt.toIso8601String(),
         'lastPositionSeconds': lastPositionSeconds,
+        'completionRate': completionRate,
         'playlistId': playlistId,
       };
 
@@ -64,10 +68,11 @@ class PlayHistory {
         durationSeconds: map['durationSeconds'] as int? ?? 0,
         playedAt: DateTime.parse(map['playedAt'] as String),
         lastPositionSeconds: map['lastPositionSeconds'] as int? ?? 0,
+        completionRate: (map['completionRate'] as num?)?.toDouble() ?? 1.0,
         playlistId: map['playlistId'] as String?,
       );
 
-  PlayHistory copyWith({int? lastPositionSeconds}) => PlayHistory(
+  PlayHistory copyWith({int? lastPositionSeconds, double? completionRate}) => PlayHistory(
         id: id,
         videoId: videoId,
         title: title,
@@ -76,6 +81,7 @@ class PlayHistory {
         durationSeconds: durationSeconds,
         playedAt: playedAt,
         lastPositionSeconds: lastPositionSeconds ?? this.lastPositionSeconds,
+        completionRate: completionRate ?? this.completionRate,
         playlistId: playlistId,
       );
 }

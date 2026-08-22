@@ -1,4 +1,5 @@
-// lib/services/db_service.dart
+﻿// lib/services/db_service.dart
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -64,6 +65,7 @@ class DbService {
         durationSeconds INTEGER NOT NULL DEFAULT 0,
         playedAt TEXT NOT NULL,
         lastPositionSeconds INTEGER NOT NULL DEFAULT 0,
+        completionRate REAL NOT NULL DEFAULT 1.0,
         playlistId TEXT
       )
     ''');
@@ -89,6 +91,15 @@ class DbService {
         channelTitle TEXT NOT NULL,
         thumbnailUrl TEXT NOT NULL,
         durationSeconds INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE recommendation_cache (
+        key TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        cachedAt INTEGER NOT NULL,
+        ttlSeconds INTEGER NOT NULL
       )
     ''');
   }
@@ -120,74 +131,57 @@ class DbService {
         )
       ''');
     }
+    if (oldVersion < 4) {
+      // Add completionRate to play_history safely
+      try {
+        await db.execute('ALTER TABLE play_history ADD COLUMN completionRate REAL NOT NULL DEFAULT 1.0');
+      } catch (_) {}
+
+      // Create recommendation_cache table
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS recommendation_cache (
+          key TEXT PRIMARY KEY,
+          data TEXT NOT NULL,
+          cachedAt INTEGER NOT NULL,
+          ttlSeconds INTEGER NOT NULL
+        )
+      ''');
+    }
   }
 
-  // ─── Playlists — fixed: single JOIN query (no N+1) ──────
+  // ── Playlists ─────────────────────────────────────────────────────────────
 
-  Future<List<Playlist>> getAllPlaylists() async {
+  Future<List<Playlist>> getPlaylists() async {
     final db = await database;
-
-    // One query with LEFT JOIN instead of N+1 separate queries
-    final rows = await db.rawQuery('''
-      SELECT
-        p.id          AS p_id,
-        p.title       AS p_title,
-        p.createdAt   AS p_createdAt,
-        p.source      AS p_source,
-        pi.videoId    AS pi_videoId,
-        pi.title      AS pi_title,
-        pi.channelTitle AS pi_channelTitle,
-        pi.thumbnailUrl AS pi_thumbnailUrl,
-        pi.durationSeconds AS pi_durationSeconds,
-        pi.`order`    AS pi_order
-      FROM playlists p
-      LEFT JOIN playlist_items pi ON p.id = pi.playlistId
-      ORDER BY p.createdAt DESC, pi.`order` ASC
-    ''');
-
-    // Group rows by playlist id
-    final Map<String, Playlist> playlistMap = {};
-    for (final row in rows) {
-      final id = row['p_id'] as String;
-      if (!playlistMap.containsKey(id)) {
-        playlistMap[id] = Playlist(
-          id: id,
-          title: row['p_title'] as String,
-          createdAt: DateTime.parse(row['p_createdAt'] as String),
-          source: row['p_source'] as String? ?? 'manual',
-          items: [],
-        );
-      }
-      // Add item if it exists (LEFT JOIN may produce null if playlist is empty)
-      if (row['pi_videoId'] != null) {
-        playlistMap[id]!.items.add(VideoItem(
-          videoId: row['pi_videoId'] as String,
-          title: row['pi_title'] as String,
-          channelTitle: row['pi_channelTitle'] as String,
-          thumbnailUrl: row['pi_thumbnailUrl'] as String,
-          durationSeconds: row['pi_durationSeconds'] as int? ?? 0,
-          order: row['pi_order'] as int? ?? 0,
-        ));
-      }
-    }
-
-    return playlistMap.values.toList();
+    final rows = await db.query('playlists', orderBy: 'createdAt DESC');
+    return rows.map(Playlist.fromMap).toList();
   }
 
   Future<Playlist?> getPlaylist(String id) async {
     final db = await database;
-    final rows = await db.query('playlists', where: 'id = ?', whereArgs: [id]);
+    final rows =
+        await db.query('playlists', where: 'id = ?', whereArgs: [id], limit: 1);
     if (rows.isEmpty) return null;
     final playlist = Playlist.fromMap(rows.first);
-    playlist.items = await getPlaylistItems(id);
-    return playlist;
+    final items = await getPlaylistItems(id);
+    return playlist.copyWith(items: items);
   }
 
   Future<void> insertPlaylist(Playlist playlist) async {
     final db = await database;
-    await db.insert('playlists', playlist.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
-    for (final item in playlist.items) {
+    await db.insert(
+      'playlists',
+      {
+        'id': playlist.id,
+        'title': playlist.title,
+        'createdAt': playlist.createdAt.toIso8601String(),
+        'source': playlist.source,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    for (int i = 0; i < playlist.items.length; i++) {
+      final item = playlist.items[i];
+      item.order = i;
       await _insertPlaylistItem(db, playlist.id, item);
     }
   }
@@ -204,7 +198,7 @@ class DbService {
     await db.delete('playlist_items', where: 'playlistId = ?', whereArgs: [id]);
   }
 
-  // ─── Playlist Items ───────────────────────────────────────
+  // ── Playlist Items ────────────────────────────────────────────────────────
 
   Future<List<VideoItem>> getPlaylistItems(String playlistId) async {
     final db = await database;
@@ -219,7 +213,6 @@ class DbService {
 
   Future<void> addItemToPlaylist(String playlistId, VideoItem item) async {
     final db = await database;
-    // Get current max order
     final result = await db.rawQuery(
         'SELECT MAX(`order`) as maxOrder FROM playlist_items WHERE playlistId = ?',
         [playlistId]);
@@ -265,8 +258,7 @@ class DbService {
     );
   }
 
-
-  // ─── Active Downloads (Background Tracking) ──────
+  // ── Active Downloads (Background Tracking) ────────────────────────────────
   
   Future<void> insertActiveDownload(String taskId, VideoItem video) async {
     final db = await database;
@@ -313,7 +305,7 @@ class DbService {
     );
   }
 
-  // ─── Play History ─────────────────────────────────────────
+  // ── Play History & Taste Profiling ────────────────────────────────────────
 
   Future<List<PlayHistory>> getPlayHistory({int limit = 50}) async {
     final db = await database;
@@ -335,7 +327,6 @@ class DbService {
 
   Future<void> upsertHistory(PlayHistory history) async {
     final db = await database;
-    // Check if video already in history today
     final existing = await db.query(
       'play_history',
       where: 'videoId = ?',
@@ -348,6 +339,7 @@ class DbService {
         {
           'playedAt': DateTime.now().toIso8601String(),
           'lastPositionSeconds': history.lastPositionSeconds,
+          'completionRate': history.completionRate,
         },
         where: 'videoId = ?',
         whereArgs: [history.videoId],
@@ -358,12 +350,90 @@ class DbService {
     }
   }
 
+  Future<void> updatePlaybackCompletion(String videoId, double completionRate, int lastPos) async {
+    final db = await database;
+    await db.update(
+      'play_history',
+      {
+        'completionRate': completionRate.clamp(0.0, 1.0),
+        'lastPositionSeconds': lastPos,
+      },
+      where: 'videoId = ?',
+      whereArgs: [videoId],
+    );
+  }
+
+  /// Taste Query: Ambil artis yang paling sering didengarkan secara tuntas dalam 30 hari terakhir
+  Future<List<String>> getTopTasteArtists({int limit = 5}) async {
+    final db = await database;
+    try {
+      final rows = await db.rawQuery('''
+        SELECT 
+          channelTitle,
+          COUNT(*) as playCount,
+          AVG(completionRate) as avgCompletion
+        FROM play_history 
+        WHERE channelTitle != '' AND channelTitle IS NOT NULL
+        GROUP BY channelTitle
+        ORDER BY (COUNT(*) * AVG(completionRate)) DESC
+        LIMIT ?
+      ''', [limit]);
+
+      return rows.map((r) => r['channelTitle'] as String).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
   Future<void> clearHistory() async {
     final db = await database;
     await db.delete('play_history');
   }
 
-  // ─── Downloads ────────────────────────────────────────────
+  // ── Recommendation Cache (12h - 24h TTL) ──────────────────────────────────
+
+  Future<List<VideoItem>?> getCachedRecommendations(String key) async {
+    final db = await database;
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final rows = await db.query(
+        'recommendation_cache',
+        where: 'key = ?',
+        whereArgs: [key],
+        limit: 1,
+      );
+      if (rows.isNotEmpty) {
+        final cachedAt = rows.first['cachedAt'] as int;
+        final ttl = rows.first['ttlSeconds'] as int;
+        if (now - cachedAt < ttl) {
+          final jsonStr = rows.first['data'] as String;
+          final List decoded = jsonDecode(jsonStr);
+          return decoded.map((item) => VideoItem.fromMap(item as Map<String, dynamic>)).toList();
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> setCachedRecommendations(String key, List<VideoItem> items, {int ttlHours = 24}) async {
+    final db = await database;
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final jsonStr = jsonEncode(items.map((e) => e.toMap()).toList());
+      await db.insert(
+        'recommendation_cache',
+        {
+          'key': key,
+          'data': jsonStr,
+          'cachedAt': now,
+          'ttlSeconds': ttlHours * 3600,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (_) {}
+  }
+
+  // ── Downloads ─────────────────────────────────────────────────────────────
 
   Future<void> insertDownload(DownloadedTrack track) async {
     final db = await database;
@@ -400,7 +470,8 @@ class DbService {
     await db.delete('downloads', where: 'videoId = ?', whereArgs: [videoId]);
   }
 
-  // ─── Favorites ────────────────────────────────────────────────────────
+  // ── Favorites ─────────────────────────────────────────────────────────────
+
   Future<bool> isFavorite(String videoId) async {
     final db = await database;
     final rows = await db.query(
@@ -414,14 +485,13 @@ class DbService {
 
   Future<bool> toggleFavorite(VideoItem video) async {
     final db = await database;
-    // Ensure favorites playlist exists
     await db.insert(
       'playlists',
       {
         'id': 'favorites',
         'title': 'Lagu Favorit',
         'createdAt': DateTime.now().toIso8601String(),
-        'isAiGenerated': 0,
+        'source': 'favorites',
       },
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );

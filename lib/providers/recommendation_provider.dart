@@ -1,11 +1,12 @@
-// lib/providers/recommendation_provider.dart
+﻿// lib/providers/recommendation_provider.dart
+import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/video_item.dart';
 import '../services/db_service.dart';
 import '../services/youtube_service.dart';
 
-/// Kategori konten ala GoTube
+/// Kategori konten ala GoTube / Spotify
 enum HomeCategory {
   all,
   trending,
@@ -40,7 +41,7 @@ extension HomeCategoryExtension on HomeCategory {
       case HomeCategory.trending:
         return 'trending indonesia 2025';
       case HomeCategory.music:
-        return 'musik indonesia terbaru 2025';
+        return 'top hits indonesia 2025';
       case HomeCategory.gaming:
         return 'gaming highlights indonesia';
       case HomeCategory.news:
@@ -54,40 +55,110 @@ extension HomeCategoryExtension on HomeCategory {
 // Provider untuk kategori aktif
 final activeCategoryProvider = StateProvider<HomeCategory>((ref) => HomeCategory.all);
 
-// Provider rekomendasi berdasarkan kategori
+// ── Daily Mix Provider (Taste-Based SQL Clustering + 24h SQLite Cache) ──
+final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async {
+  final dbService = DbService();
+  final ytService = YoutubeService();
+
+  // 1. Check local SQLite cache first (24h TTL)
+  final cached = await dbService.getCachedRecommendations('daily_mix');
+  if (cached != null && cached.isNotEmpty) {
+    return cached;
+  }
+
+  final mix = <VideoItem>[];
+  final seenIds = <String>{};
+
+  // 2. Query top favorite artists based on completion rate and play count
+  final topArtists = await dbService.getTopTasteArtists(limit: 3);
+
+  if (topArtists.isNotEmpty) {
+    for (final artist in topArtists) {
+      try {
+        final songs = await ytService.searchVideos('$artist popular songs', maxResults: 5);
+        for (final s in songs) {
+          if (seenIds.add(s.videoId)) mix.add(s);
+        }
+      } catch (_) {}
+    }
+  }
+
+  // 3. Supplement with related tracks from last played song
+  final lastPlayed = await dbService.getLastPlayed();
+  if (lastPlayed != null) {
+    try {
+      final related = await ytService.getRelatedVideos(lastPlayed.toVideoItem(), maxResults: 8);
+      for (final s in related) {
+        if (seenIds.add(s.videoId)) mix.add(s);
+      }
+    } catch (_) {}
+  }
+
+  // 4. Fallback if user has no listening history yet
+  if (mix.isEmpty) {
+    try {
+      final trending = await ytService.getTrendingVideos(maxResults: 15);
+      for (final s in trending) {
+        if (seenIds.add(s.videoId)) mix.add(s);
+      }
+    } catch (_) {}
+  }
+
+  // Shuffle slightly for organic listening experience
+  mix.shuffle(Random());
+
+  // Save to 24h SQLite cache
+  if (mix.isNotEmpty) {
+    await dbService.setCachedRecommendations('daily_mix', mix, ttlHours: 24);
+  }
+
+  return mix;
+});
+
+// Provider rekomendasi berdasarkan kategori (dengan 12h SQLite Cache)
 final recommendationProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async {
   final category = ref.watch(activeCategoryProvider);
   final ytService = YoutubeService();
   final dbService = DbService();
+  final cacheKey = 'cat_${category.name}';
+
+  // Check 12h cache
+  final cached = await dbService.getCachedRecommendations(cacheKey);
+  if (cached != null && cached.isNotEmpty) {
+    return cached;
+  }
+
+  List<VideoItem> results = [];
 
   switch (category) {
     case HomeCategory.all:
-      // Gunakan history-based recommendation (perilaku asal)
       final lastPlayed = await dbService.getLastPlayed();
       if (lastPlayed != null) {
-        final seedVideo = VideoItem(
-          videoId: lastPlayed.videoId,
-          title: lastPlayed.title,
-          channelTitle: lastPlayed.channelTitle,
-          thumbnailUrl: lastPlayed.thumbnailUrl,
-          durationSeconds: lastPlayed.durationSeconds,
-        );
         try {
-          final related = await ytService.getRelatedVideos(seedVideo, maxResults: 15);
-          if (related.isNotEmpty) return related;
-        } catch (_) {
-          // fallthrough ke trending
-        }
+          final related = await ytService.getRelatedVideos(lastPlayed.toVideoItem(), maxResults: 15);
+          if (related.isNotEmpty) results = related;
+        } catch (_) {}
       }
-      return ytService.getTrendingVideos(maxResults: 15);
+      if (results.isEmpty) {
+        results = await ytService.getTrendingVideos(maxResults: 15);
+      }
+      break;
 
     case HomeCategory.trending:
-      return ytService.getTrendingVideos(maxResults: 15);
+      results = await ytService.getTrendingVideos(maxResults: 15);
+      break;
 
     case HomeCategory.music:
     case HomeCategory.gaming:
     case HomeCategory.news:
     case HomeCategory.live:
-      return ytService.searchVideos(category.searchQuery, maxResults: 15);
+      results = await ytService.searchVideos(category.searchQuery, maxResults: 15);
+      break;
   }
+
+  if (results.isNotEmpty) {
+    await dbService.setCachedRecommendations(cacheKey, results, ttlHours: 12);
+  }
+
+  return results;
 });

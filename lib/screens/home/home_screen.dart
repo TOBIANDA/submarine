@@ -1,4 +1,4 @@
-// lib/screens/home/home_screen.dart
+﻿// lib/screens/home/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,26 +9,20 @@ import '../../providers/player_provider.dart';
 import '../../models/video_item.dart';
 import '../../theme/app_theme.dart';
 
-class HomeScreen extends ConsumerStatefulWidget {
+class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
-
-  @override
-  ConsumerState<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends ConsumerState<HomeScreen> {
-  int _selectedCategoryIndex = 0;
-  final List<String> _categories = ['All', 'Music', 'Podcasts'];
 
   String _getGreeting() {
     final hour = DateTime.now().hour;
-    if (hour < 12) return 'good morning,';
-    if (hour < 17) return 'good afternoon,';
-    return 'good evening,';
+    if (hour < 12) return 'Selamat pagi,';
+    if (hour < 17) return 'Selamat siang,';
+    return 'Selamat malam,';
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeCategory = ref.watch(activeCategoryProvider);
+    final dailyMixAsync = ref.watch(dailyMixProvider);
     final recommendationAsync = ref.watch(recommendationProvider);
 
     return Scaffold(
@@ -36,13 +30,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
+            ref.invalidate(dailyMixProvider);
             ref.invalidate(recommendationProvider);
           },
           color: AppTheme.primaryLight,
           backgroundColor: AppTheme.surfaceVariant,
           child: CustomScrollView(
             slivers: [
-              // ── Header (Greeting + Title + Icons) ──────────────
+              // ── Header (Greeting + Title + Icons) ─────────────────────
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -93,29 +88,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ),
 
-              // ── Category Pills (All, Music, Podcasts) ───────────
+              // ── Category Pills (All, Trending, Music, Gaming, News, Live) ──
               SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: Row(
-                    children: List.generate(_categories.length, (index) {
-                      final isSelected = _selectedCategoryIndex == index;
+                child: SizedBox(
+                  height: 38,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: HomeCategory.values.length,
+                    itemBuilder: (context, index) {
+                      final cat = HomeCategory.values[index];
+                      final isSelected = activeCategory == cat;
                       return Padding(
-                        padding: const EdgeInsets.only(right: 10),
+                        padding: const EdgeInsets.only(right: 8),
                         child: GestureDetector(
                           onTap: () {
-                            setState(() {
-                              _selectedCategoryIndex = index;
-                            });
+                            ref.read(activeCategoryProvider.notifier).state = cat;
                           },
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                             decoration: BoxDecoration(
                               color: isSelected ? const Color(0xFF6C4CE0) : const Color(0xFF1E1E2E),
                               borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: isSelected ? const Color(0xFF8B6EF3) : Colors.white.withValues(alpha: 0.05),
+                              ),
                             ),
                             child: Text(
-                              _categories[index],
+                              cat.label,
                               style: TextStyle(
                                 color: isSelected ? Colors.white : AppTheme.textSecondary,
                                 fontSize: 13,
@@ -125,53 +125,104 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           ),
                         ),
                       );
-                    }),
+                    },
                   ),
                 ),
               ),
 
-              // ── AI Playlist Quick Action Card ───────────────────
+              // ── AI Playlist Banner Quick Action ─────────────────────────
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                  child: Row(
-                    children: [
-                      GestureDetector(
-                        onTap: () => context.push('/library/ai-create'),
-                        child: Container(
-                          height: 56,
-                          padding: const EdgeInsets.only(right: 18),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E1E2E),
-                            borderRadius: BorderRadius.circular(12),
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                  child: GestureDetector(
+                    onTap: () => context.push('/library/ai-create'),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFF6C4CE0).withValues(alpha: 0.35),
+                            const Color(0xFF25D9A0).withValues(alpha: 0.15),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: const Color(0xFF6C4CE0).withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF25D9A0), Color(0xFF1FBF9C)],
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 22),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 56,
-                                height: 56,
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [Color(0xFF25D9A0), Color(0xFF1FBF9C)],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
+                          const SizedBox(width: 14),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Buat Playlist Otomatis AI',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
                                   ),
-                                  borderRadius: BorderRadius.horizontal(left: Radius.circular(12)),
                                 ),
-                                child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 24),
-                              ),
-                              const SizedBox(width: 14),
-                              const Text(
-                                'AI Playlist',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
+                                SizedBox(height: 2),
+                                Text(
+                                  'Ketik suasana hati atau tema musik favoritmu',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
+                          const Icon(Icons.chevron_right_rounded, color: Colors.white54),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Section: Daily Mix Untukmu (Taste Clustering) ─────────
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.stars_rounded, color: Color(0xFF25D9A0), size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'Daily Mix Untukmu',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        'Taste Engine',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                          fontSize: 12,
                         ),
                       ),
                     ],
@@ -179,36 +230,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ),
 
-              // ── Section: Top Picks for You ───────────────────────
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
-                  child: const Text(
-                    'Top Picks for You',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-
-              // ── Horizontal Cards List ────────────────────────────
+              // ── Horizontal Cards (Daily Mix) ──────────────────────────
               SliverToBoxAdapter(
                 child: SizedBox(
-                  height: 220,
-                  child: recommendationAsync.when(
+                  height: 210,
+                  child: dailyMixAsync.when(
                     loading: () => const Center(
                       child: CircularProgressIndicator(color: AppTheme.primaryLight),
                     ),
                     error: (e, _) => Center(
-                      child: Text('Gagal memuat: $e', style: const TextStyle(color: AppTheme.textSecondary)),
+                      child: Text('Gagal memuat Daily Mix: $e', style: const TextStyle(color: AppTheme.textSecondary)),
                     ),
                     data: (videos) {
                       if (videos.isEmpty) {
                         return const Center(
-                          child: Text('Tidak ada lagu', style: TextStyle(color: AppTheme.textSecondary)),
+                          child: Text('Belum ada riwayat lagu untuk Daily Mix', style: TextStyle(color: AppTheme.textSecondary)),
                         );
                       }
                       return ListView.builder(
@@ -220,7 +256,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           return _SquareMusicCard(
                             video: video,
                             onTap: () {
-                              ref.read(playerServiceProvider).playSingle(video);
+                              ref.read(playerServiceProvider).loadQueue(videos, initialIndex: index);
                               context.push('/player', extra: video);
                             },
                           );
@@ -231,25 +267,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ),
 
-              // ── Section: Lagu Populer Lainnya ────────────────────
+              // ── Section: Rekomendasi & Populer ────────────────────────
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-                  child: const Text(
-                    'Lagu Populer',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.trending_up_rounded, color: Color(0xFF6C4CE0), size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        activeCategory == HomeCategory.all ? 'Rekomendasi Teratas' : 'Kategori ${activeCategory.label}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
 
-              // ── Vertical Tracks List ─────────────────────────────
+              // ── Vertical Tracks List (Rekomendasi Kategori) ────────────
               recommendationAsync.when(
-                loading: () => const SliverToBoxAdapter(child: SizedBox(height: 100)),
-                error: (_, __) => const SliverToBoxAdapter(child: SizedBox.shrink()),
+                loading: () => const SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 120,
+                    child: Center(child: CircularProgressIndicator(color: AppTheme.primaryLight)),
+                  ),
+                ),
+                error: (err, _) => SliverToBoxAdapter(
+                  child: Center(child: Text('Gagal memuat: $err', style: const TextStyle(color: AppTheme.textSecondary))),
+                ),
                 data: (videos) {
                   return SliverPadding(
                     padding: const EdgeInsets.only(bottom: 90),
@@ -274,8 +323,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               video.title,
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontWeight: FontWeight.w500,
                                 fontSize: 14,
+                                fontWeight: FontWeight.w600,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -289,15 +338,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.play_circle_fill_rounded, color: AppTheme.primaryLight, size: 32),
-                              onPressed: () {
-                                ref.read(playerServiceProvider).playSingle(video);
-                                context.push('/player', extra: video);
-                              },
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.play_circle_fill_rounded, color: AppTheme.primaryLight, size: 30),
+                                  onPressed: () {
+                                    ref.read(playerServiceProvider).loadQueue(videos, initialIndex: index);
+                                    context.push('/player', extra: video);
+                                  },
+                                ),
+                              ],
                             ),
                             onTap: () {
-                              ref.read(playerServiceProvider).playSingle(video);
+                              ref.read(playerServiceProvider).loadQueue(videos, initialIndex: index);
                               context.push('/player', extra: video);
                             },
                           );
@@ -316,50 +370,70 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-// ──────────────────────────────────────────────
-// Square Music Card (Horizontal Scroll)
-// ──────────────────────────────────────────────
+// ── Square Music Card for Horizontal Lists ──────────────────────────────
 class _SquareMusicCard extends StatelessWidget {
   final VideoItem video;
   final VoidCallback onTap;
 
-  const _SquareMusicCard({required this.video, required this.onTap});
+  const _SquareMusicCard({
+    required this.video,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 150,
-        margin: const EdgeInsets.symmetric(horizontal: 6),
+    return Container(
+      width: 140,
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+      child: GestureDetector(
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Square Cover Art
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: CachedNetworkImage(
-                imageUrl: video.thumbnailHighRes.isNotEmpty ? video.thumbnailHighRes : video.thumbnailUrl,
-                width: 150,
-                height: 150,
-                fit: BoxFit.cover,
-                placeholder: (_, __) => Container(
-                  width: 150,
-                  height: 150,
-                  color: const Color(0xFF1E1E2E),
-                  child: const Icon(Icons.music_note, color: Colors.white24, size: 40),
+            // Album Art
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: CachedNetworkImage(
+                    imageUrl: video.thumbnailUrl,
+                    width: 140,
+                    height: 140,
+                    fit: BoxFit.cover,
+                    placeholder: (_, __) => Container(
+                      width: 140,
+                      height: 140,
+                      color: const Color(0xFF1E1E2E),
+                    ),
+                    errorWidget: (_, __, ___) => Container(
+                      width: 140,
+                      height: 140,
+                      color: const Color(0xFF1E1E2E),
+                      child: const Icon(Icons.music_note, color: Colors.white54),
+                    ),
+                  ),
                 ),
-                errorWidget: (_, __, ___) => Container(
-                  width: 150,
-                  height: 150,
-                  color: const Color(0xFF1E1E2E),
-                  child: const Icon(Icons.music_note, color: Colors.white),
+                Positioned(
+                  bottom: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.7),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
             const SizedBox(height: 8),
 
-            // Title
+            // Song Title
             Text(
               video.title,
               style: const TextStyle(
@@ -372,7 +446,7 @@ class _SquareMusicCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
 
-            // Artist
+            // Artist Name
             Text(
               video.channelTitle,
               style: const TextStyle(

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:path_provider/path_provider.dart';
@@ -18,6 +19,8 @@ class PlayerService extends ChangeNotifier {
   PlayerService._();
   factory PlayerService() => _instance ??= PlayerService._();
 
+  static const _extractorChannel = MethodChannel('com.submarine/extractor');
+
   late BackgroundAudioHandler _audioHandler;
   AudioPlayer get audioPlayer => _audioHandler.player;
 
@@ -27,6 +30,10 @@ class PlayerService extends ChangeNotifier {
   RepeatMode _repeatMode = RepeatMode.none;
   bool _audioFocusMode = true;
   bool _isLoadingAudio = false;
+
+  // Set of track IDs that have already triggered 70% radio prefetch
+  final Set<String> _prefetchedTrackIds = <String>{};
+  bool _isPrefetchingRadio = false;
 
   VoidCallback? onHistoryUpdated;
 
@@ -70,9 +77,23 @@ class PlayerService extends ChangeNotifier {
 
     audioPlayer.processingStateStream.listen((state) {
       if (state == ProcessingState.completed) {
+        _recordCompletion(1.0);
         _onTrackEnded();
       }
       notifyListeners();
+    });
+
+    // ── Pre-fetch Automix at 70% song duration for zero-lag continuous listening ──
+    audioPlayer.positionStream.listen((pos) {
+      final cur = currentVideo;
+      final dur = audioPlayer.duration;
+      if (cur != null && dur != null && dur.inSeconds > 15) {
+        final progress = pos.inMilliseconds / dur.inMilliseconds;
+        if (progress >= 0.70 && !_prefetchedTrackIds.contains(cur.videoId)) {
+          _prefetchedTrackIds.add(cur.videoId);
+          _prefetchRadioTracks(cur.videoId);
+        }
+      }
     });
 
     _audioHandler.customEvent.listen((event) {
@@ -81,6 +102,7 @@ class PlayerService extends ChangeNotifier {
       if (event == 'play') play();
       if (event == 'pause') pause();
       if (event == 'stop') {
+        _recordCurrentProgress();
         _playlist.clear();
         _currentIndex = -1;
         _isLoadingAudio = false;
@@ -89,8 +111,74 @@ class PlayerService extends ChangeNotifier {
     });
   }
 
+  /// Prefetch 5 related/automix radio tracks from YouTube Music when queue is low
+  Future<void> _prefetchRadioTracks(String seedVideoId) async {
+    if (_isPrefetchingRadio) return;
+    
+    // Only prefetch if we are at or near the end of the current playlist
+    final remainingInQueue = _playlist.length - 1 - _currentIndex;
+    if (remainingInQueue > 2) return;
+
+    _isPrefetchingRadio = true;
+    try {
+      debugPrint('[Player] Pre-fetching Automix radio tracks for seed: $seedVideoId (progress >= 70%)');
+      final List? results = await _extractorChannel.invokeMethod<List>('getRadioTracks', {
+        'videoId': seedVideoId,
+        'limit': 5,
+      });
+
+      if (results != null && results.isNotEmpty) {
+        final existingIds = _playlist.map((e) => e.videoId).toSet();
+        final newTracks = <VideoItem>[];
+
+        for (final item in results) {
+          if (item is Map) {
+            final vId = item['videoId'] as String? ?? '';
+            if (vId.isNotEmpty && !existingIds.contains(vId)) {
+              newTracks.add(VideoItem(
+                videoId: vId,
+                title: item['title'] as String? ?? 'Unknown Title',
+                channelTitle: item['channelTitle'] as String? ?? 'Unknown Artist',
+                thumbnailUrl: item['thumbnailUrl'] as String? ?? 'https://i.ytimg.com/vi/$vId/hqdefault.jpg',
+                durationSeconds: item['durationSeconds'] as int? ?? 0,
+              ));
+              existingIds.add(vId);
+            }
+          }
+        }
+
+        if (newTracks.isNotEmpty) {
+          _playlist.addAll(newTracks);
+          debugPrint('[Player] Added ${newTracks.length} continuous radio tracks to queue!');
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('[Player] Pre-fetch radio error (non-fatal): $e');
+    } finally {
+      _isPrefetchingRadio = false;
+    }
+  }
+
+  void _recordCompletion(double rate) {
+    final cur = currentVideo;
+    if (cur != null) {
+      DbService().updatePlaybackCompletion(cur.videoId, rate, position.inSeconds);
+    }
+  }
+
+  void _recordCurrentProgress() {
+    final cur = currentVideo;
+    final dur = audioPlayer.duration;
+    if (cur != null && dur != null && dur.inSeconds > 0) {
+      final rate = (position.inSeconds / dur.inSeconds).clamp(0.0, 1.0);
+      DbService().updatePlaybackCompletion(cur.videoId, rate, position.inSeconds);
+    }
+  }
+
   Future<void> loadQueue(List<VideoItem> items, {int startIndex = 0, int? initialIndex, String? playlistId}) async {
     if (items.isEmpty) return;
+    _recordCurrentProgress();
     _playlist = List.from(items);
     final targetIdx = initialIndex ?? startIndex;
     _currentIndex = targetIdx.clamp(0, _playlist.length - 1);
@@ -108,6 +196,7 @@ class PlayerService extends ChangeNotifier {
   }
 
   Future<void> playSingle(VideoItem video) async {
+    _recordCurrentProgress();
     final idx = _playlist.indexWhere((v) => v.videoId == video.videoId);
     if (idx != -1) {
       _currentIndex = idx;
@@ -121,6 +210,7 @@ class PlayerService extends ChangeNotifier {
 
   Future<void> playAt(int index) async {
     if (index >= 0 && index < _playlist.length) {
+      _recordCurrentProgress();
       _currentIndex = index;
       notifyListeners();
       await _playCurrent();
@@ -161,8 +251,9 @@ class PlayerService extends ChangeNotifier {
         channelTitle: video.channelTitle,
         thumbnailUrl: video.thumbnailUrl,
         playedAt: DateTime.now(),
-        durationSeconds: video.durationSeconds,
+        durationSeconds: video.durationSeconds ?? 0,
         lastPositionSeconds: 0,
+        completionRate: 1.0,
       ));
       onHistoryUpdated?.call();
     } catch (e) {
@@ -175,25 +266,22 @@ class PlayerService extends ChangeNotifier {
 
   Future<String?> _getOfflineFilePath(String videoId) async {
     try {
-      // 1. Check in SQLite database records
       final downloaded = await DbService().getDownload(videoId);
       if (downloaded != null && await File(downloaded.localPath).exists()) {
         return downloaded.localPath;
       }
 
-      // 2. Fallback check in App Documents Directory
       final appDir = await getApplicationDocumentsDirectory();
-      for (final ext in ['webm', 'm4a', 'opus', 'mp3', 'mp4']) {
+      for (final ext in ['m4a', 'webm', 'opus', 'mp3', 'mp4']) {
         final f = File('${appDir.path}/downloads/$videoId.$ext');
         if (await f.exists() && (await f.length()) > 10000) {
           return f.path;
         }
       }
 
-      // 3. Fallback check in External Storage Directory
       final extDir = await getExternalStorageDirectory();
       if (extDir != null) {
-        for (final ext in ['webm', 'm4a', 'opus', 'mp3', 'mp4']) {
+        for (final ext in ['m4a', 'webm', 'opus', 'mp3', 'mp4']) {
           final f = File('${extDir.path}/downloads/$videoId.$ext');
           if (await f.exists() && (await f.length()) > 10000) {
             return f.path;
@@ -221,6 +309,7 @@ class PlayerService extends ChangeNotifier {
 
   Future<void> playNext() async {
     if (_playlist.isEmpty) return;
+    _recordCurrentProgress();
     if (_isShuffle) {
       _currentIndex = (DateTime.now().millisecondsSinceEpoch % _playlist.length);
     } else {
@@ -232,6 +321,7 @@ class PlayerService extends ChangeNotifier {
 
   Future<void> playPrevious() async {
     if (_playlist.isEmpty) return;
+    _recordCurrentProgress();
     if (_currentIndex > 0) {
       _currentIndex--;
     } else {
@@ -242,6 +332,7 @@ class PlayerService extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    _recordCurrentProgress();
     try {
       await _audioHandler.stop();
     } catch (_) {}
@@ -281,6 +372,14 @@ class PlayerService extends ChangeNotifier {
       _playCurrent();
     } else if (hasNext) {
       playNext();
+    } else {
+      // End of playlist: automatically trigger radio play if we have current video
+      final cur = currentVideo;
+      if (cur != null) {
+        _prefetchRadioTracks(cur.videoId).then((_) {
+          if (hasNext) playNext();
+        });
+      }
     }
   }
 }
