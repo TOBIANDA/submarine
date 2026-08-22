@@ -1,10 +1,13 @@
 ﻿// backend/submarine-license-worker.js
-// Cloudflare Worker: Full Custom Key Generator & Licensing Backend
+// Cloudflare Worker: Full Real-Time Sync Custom Key Generator & Licensing Backend
 
 const ADMIN_PIN = "8899";
 const SALT = "SubMarine_Secure_2026_Salt";
 
 let defaultKeys = [
+  { code: "SAYACHINA02", name: "WILLY", active: true, createdAt: "2026-08-22" },
+  { code: "SAYACHINA01", name: "EDGAR", active: true, createdAt: "2026-08-22" },
+  { code: "SUB-EDGAR-D562A0", name: "EDGAR", active: true, createdAt: "2026-08-22" },
   { code: "SUB-VIP", name: "TOBI VIP", active: true, createdAt: "2026-08-22" },
   { code: "SUB-TOBI-D705EE", name: "TOBI", active: true, createdAt: "2026-08-22" },
   { code: "SUB-ANDI-958D09", name: "ANDI", active: true, createdAt: "2026-08-22" },
@@ -83,7 +86,7 @@ export default {
       });
     }
 
-    // ── 2. API: Admin Endpoints ──
+    // ── 2. API: Admin Endpoints (Sinkronisasi Kunci dari Dashboard) ──
     if (url.pathname === "/api/keys") {
       if (request.method === "GET") {
         const keys = await getKeys();
@@ -101,23 +104,21 @@ export default {
         }
 
         const keys = await getKeys();
-        if (keys.some(k => k.code === code)) {
-          return new Response(JSON.stringify({ error: "Kode kunci sudah ada sebelumnya" }), {
-            status: 400,
-            headers: corsHeaders,
+        const existingIdx = keys.findIndex(k => k.code === code);
+        if (existingIdx !== -1) {
+          keys[existingIdx].name = name;
+          keys[existingIdx].active = true;
+        } else {
+          keys.unshift({
+            code,
+            name,
+            active: true,
+            createdAt: new Date().toISOString().split("T")[0],
           });
         }
 
-        const newKey = {
-          code,
-          name,
-          active: true,
-          createdAt: new Date().toISOString().split("T")[0],
-        };
-
-        keys.unshift(newKey);
         await saveKeys(keys);
-        return new Response(JSON.stringify({ success: true, key: newKey }), { headers: corsHeaders });
+        return new Response(JSON.stringify({ success: true, keys }), { headers: corsHeaders });
       }
 
       if (request.method === "DELETE") {
@@ -126,7 +127,7 @@ export default {
         let keys = await getKeys();
         keys = keys.filter(k => k.code !== code);
         await saveKeys(keys);
-        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
+        return new Response(JSON.stringify({ success: true, keys }), { headers: corsHeaders });
       }
     }
 
@@ -333,8 +334,8 @@ const dashboardHtml = `<!DOCTYPE html>
           <div class="val" id="activeKeysCount" style="color:#34d399;">0</div>
         </div>
         <div class="stat-card">
-          <h3>Tipe Kunci</h3>
-          <div class="val" style="color:#22d3ee; font-size:20px;">Custom & Crypto</div>
+          <h3>Status Server</h3>
+          <div class="val" style="color:#22d3ee; font-size:18px;">Cloudflare Online ☁️</div>
         </div>
       </div>
 
@@ -342,7 +343,7 @@ const dashboardHtml = `<!DOCTYPE html>
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
           <div>
             <h2 style="font-size:18px; font-weight:700;">Daftar Kunci Akses Teman</h2>
-            <p style="color:var(--text-dim); font-size:13px;">Kamu bisa membuat kode bebas sesukamu (Contoh: <code>SUB-VIP</code>, <code>SUB-ANDI-KEREN</code>, dll).</p>
+            <p style="color:var(--text-dim); font-size:13px;">Kamu bisa membuat kode bebas sesukamu (Contoh: <code>SAYACHINA02</code>, <code>SUB-VIP</code>, <code>ANDI-123</code>).</p>
           </div>
           <button class="btn btn-primary" onclick="openCreateModal()">+ Buat Kunci Baru</button>
         </div>
@@ -376,14 +377,14 @@ const dashboardHtml = `<!DOCTYPE html>
       </div>
       <div class="input-group">
         <label>Nama Panggilan Teman</label>
-        <input type="text" id="newKeyName" placeholder="Contoh: ANDI, GHAZI, BUDI...">
+        <input type="text" id="newKeyName" placeholder="Contoh: WILLY, EDGAR, ANDI...">
       </div>
       <div class="input-group">
         <label>Kode Kunci Kustom (Bebas / Sesukamu)</label>
-        <input type="text" id="newKeyCode" placeholder="Contoh: SUB-VIP, SUB-ANDI-123 (Kosongkan jika ingin auto)">
+        <input type="text" id="newKeyCode" placeholder="Contoh: SAYACHINA02, SUB-VIP, dll">
       </div>
       <div style="background:rgba(99,102,241,0.1); border:1px solid rgba(99,102,241,0.25); border-radius:10px; padding:12px; font-size:12px; color:#a5b4fc; line-height:1.4;">
-        💡 Kamu bebas menentukan format kode kunci apa saja sesuai keinginanmu!
+        💡 Kamu bebas menentukan format kode kunci apa saja sesuai keinginanmu! Kode ini akan langsung tersinkronisasi ke server cloud.
       </div>
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:24px;">
         <button class="btn btn-outline" onclick="closeCreateModal()">Batal</button>
@@ -403,6 +404,9 @@ const dashboardHtml = `<!DOCTYPE html>
     }
 
     var defaultKeysList = [
+      { code: "SAYACHINA02", name: "WILLY", active: true, createdAt: "2026-08-22" },
+      { code: "SAYACHINA01", name: "EDGAR", active: true, createdAt: "2026-08-22" },
+      { code: "SUB-EDGAR-D562A0", name: "EDGAR", active: true, createdAt: "2026-08-22" },
       { code: "SUB-VIP", name: "TOBI VIP", active: true, createdAt: "2026-08-22" },
       { code: "SUB-TOBI-D705EE", name: "TOBI", active: true, createdAt: "2026-08-22" },
       { code: "SUB-ANDI-958D09", name: "ANDI", active: true, createdAt: "2026-08-22" },
@@ -437,11 +441,28 @@ const dashboardHtml = `<!DOCTYPE html>
       }
     }
 
-    function showDashboard() {
+    async function showDashboard() {
       document.getElementById("loginSection").style.display = "none";
       document.getElementById("dashboardSection").style.display = "block";
       document.getElementById("adminHeaderActions").style.display = "block";
       renderTable();
+      await loadKeysFromServer();
+    }
+
+    async function loadKeysFromServer() {
+      try {
+        var res = await fetch("/api/keys");
+        if (res.ok) {
+          var data = await res.json();
+          if (data && data.keys) {
+            keysList = data.keys;
+            safeSet("sub_crypto_keys", JSON.stringify(keysList));
+            renderTable();
+          }
+        }
+      } catch(e) {
+        console.log("Using cached keys:", e);
+      }
     }
 
     function logout() {
@@ -451,11 +472,6 @@ const dashboardHtml = `<!DOCTYPE html>
       document.getElementById("loginSection").style.display = "block";
       var pinEl = document.getElementById("pinInput");
       if (pinEl) pinEl.value = "";
-    }
-
-    function saveLocal() {
-      safeSet("sub_crypto_keys", JSON.stringify(keysList));
-      renderTable();
     }
 
     function renderTable() {
@@ -527,10 +543,19 @@ const dashboardHtml = `<!DOCTYPE html>
       if (activeEl) activeEl.innerText = activeCount;
     }
 
-    function deleteKey(code) {
+    async function deleteKey(code) {
       if (!confirm("Hapus kunci " + code + "?")) return;
       keysList = keysList.filter(function(k) { return k.code !== code; });
-      saveLocal();
+      safeSet("sub_crypto_keys", JSON.stringify(keysList));
+      renderTable();
+
+      try {
+        await fetch("/api/keys", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code })
+        });
+      } catch(e) {}
     }
 
     function openCreateModal() {
@@ -555,20 +580,41 @@ const dashboardHtml = `<!DOCTYPE html>
         code = "SUB-" + rawName + "-" + rand;
       }
 
-      if (keysList.some(function(k) { return k.code === code; })) {
-        alert("Kunci untuk nama ini sudah ada: " + code);
-        return;
+      var existingIdx = keysList.findIndex(function(k) { return k.code === code; });
+      if (existingIdx !== -1) {
+        keysList[existingIdx].name = rawName;
+        keysList[existingIdx].active = true;
+      } else {
+        keysList.unshift({
+          code: code,
+          name: rawName,
+          active: true,
+          createdAt: new Date().toISOString().split("T")[0]
+        });
       }
 
-      keysList.unshift({
-        code: code,
-        name: rawName,
-        active: true,
-        createdAt: new Date().toISOString().split("T")[0]
-      });
-
-      saveLocal();
+      safeSet("sub_crypto_keys", JSON.stringify(keysList));
+      renderTable();
       closeCreateModal();
+
+      try {
+        var res = await fetch("/api/keys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: rawName, code: code })
+        });
+        if (res.ok) {
+          var data = await res.json();
+          if (data && data.keys) {
+            keysList = data.keys;
+            safeSet("sub_crypto_keys", JSON.stringify(keysList));
+            renderTable();
+          }
+        }
+      } catch(e) {
+        console.error("Cloud sync error:", e);
+      }
+
       copyText(code);
     }
 
