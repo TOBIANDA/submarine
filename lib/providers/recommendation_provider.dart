@@ -39,9 +39,9 @@ extension HomeCategoryExtension on HomeCategory {
       case HomeCategory.all:
         return '';
       case HomeCategory.trending:
-        return 'trending indonesia 2025';
+        return 'top hits indonesia 2025 official audio';
       case HomeCategory.music:
-        return 'top hits indonesia 2025';
+        return 'pop indonesia official audio 2025';
       case HomeCategory.gaming:
         return 'gaming highlights indonesia';
       case HomeCategory.news:
@@ -63,7 +63,7 @@ final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async
   // 1. Check local SQLite cache first (24h TTL)
   final cached = await dbService.getCachedRecommendations('daily_mix');
   if (cached != null && cached.isNotEmpty) {
-    return cached;
+    return cached.where((s) => s.isSingleSong).toList();
   }
 
   final mix = <VideoItem>[];
@@ -75,9 +75,13 @@ final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async
   if (topArtists.isNotEmpty) {
     for (final artist in topArtists) {
       try {
-        final songs = await ytService.searchVideos('$artist popular songs', maxResults: 5);
+        // Bias search towards official artist audio & topic singles
+        final cleanArtist = artist.replaceAll(RegExp(r'\s*-\s*Topic', caseSensitive: false), '').trim();
+        final songs = await ytService.searchVideos('$cleanArtist official audio', maxResults: 6);
         for (final s in songs) {
-          if (seenIds.add(s.videoId)) mix.add(s);
+          if (s.isSingleSong && seenIds.add(s.videoId)) {
+            mix.add(s);
+          }
         }
       } catch (_) {}
     }
@@ -89,7 +93,9 @@ final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async
     try {
       final related = await ytService.getRelatedVideos(lastPlayed.toVideoItem(), maxResults: 8);
       for (final s in related) {
-        if (seenIds.add(s.videoId)) mix.add(s);
+        if (s.isSingleSong && seenIds.add(s.videoId)) {
+          mix.add(s);
+        }
       }
     } catch (_) {}
   }
@@ -99,7 +105,9 @@ final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async
     try {
       final trending = await ytService.getTrendingVideos(maxResults: 15);
       for (final s in trending) {
-        if (seenIds.add(s.videoId)) mix.add(s);
+        if (s.isSingleSong && seenIds.add(s.videoId)) {
+          mix.add(s);
+        }
       }
     } catch (_) {}
   }
@@ -125,7 +133,7 @@ final recommendationProvider = FutureProvider.autoDispose<List<VideoItem>>((ref)
   // Check 12h cache
   final cached = await dbService.getCachedRecommendations(cacheKey);
   if (cached != null && cached.isNotEmpty) {
-    return cached;
+    return cached.where((s) => s.isSingleSong).toList();
   }
 
   List<VideoItem> results = [];
@@ -136,23 +144,26 @@ final recommendationProvider = FutureProvider.autoDispose<List<VideoItem>>((ref)
       if (lastPlayed != null) {
         try {
           final related = await ytService.getRelatedVideos(lastPlayed.toVideoItem(), maxResults: 15);
-          if (related.isNotEmpty) results = related;
+          results = related.where((s) => s.isSingleSong).toList();
         } catch (_) {}
       }
       if (results.isEmpty) {
-        results = await ytService.getTrendingVideos(maxResults: 15);
+        final trending = await ytService.getTrendingVideos(maxResults: 15);
+        results = trending.where((s) => s.isSingleSong).toList();
       }
       break;
 
     case HomeCategory.trending:
-      results = await ytService.getTrendingVideos(maxResults: 15);
+      final trending = await ytService.getTrendingVideos(maxResults: 15);
+      results = trending.where((s) => s.isSingleSong).toList();
       break;
 
     case HomeCategory.music:
     case HomeCategory.gaming:
     case HomeCategory.news:
     case HomeCategory.live:
-      results = await ytService.searchVideos(category.searchQuery, maxResults: 15);
+      final searched = await ytService.searchVideos(category.searchQuery, maxResults: 15);
+      results = searched.where((s) => s.isSingleSong).toList();
       break;
   }
 

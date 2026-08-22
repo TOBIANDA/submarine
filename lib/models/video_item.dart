@@ -1,4 +1,4 @@
-// lib/models/video_item.dart
+﻿// lib/models/video_item.dart
 
 class VideoItem {
   final String videoId;
@@ -29,6 +29,39 @@ class VideoItem {
 
   String get thumbnailHighRes =>
       'https://img.youtube.com/vi/$videoId/hqdefault.jpg';
+
+  /// Cek apakah video merupakan single lagu resmi (bukan full album / kompilasi panjang)
+  bool get isSingleSong {
+    // 1. Durasi lagu normal: antara 45 detik hingga 11 menit (660 detik)
+    if (durationSeconds > 0 && (durationSeconds < 45 || durationSeconds > 660)) {
+      return false;
+    }
+    // 2. Filter kata kunci album kompilasi / non-stop
+    final lower = title.toLowerCase();
+    const blacklist = [
+      'full album',
+      'album lengkap',
+      'kompilasi',
+      'compilation',
+      '1 hour',
+      '2 hour',
+      '3 hour',
+      '1 jam',
+      '2 jam',
+      'nonstop',
+      'non stop',
+      'discography',
+      'best songs of',
+      'top 50',
+      'top 100',
+      'podcast',
+      'audiobook',
+    ];
+    for (final kw in blacklist) {
+      if (lower.contains(kw)) return false;
+    }
+    return true;
+  }
 
   Map<String, dynamic> toMap() => {
         'videoId': videoId,

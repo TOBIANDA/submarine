@@ -180,6 +180,13 @@ class MainActivity: AudioServiceActivity() {
                             val list = mutableListOf<Map<String, Any?>>()
                             val related = extractor.relatedItems
                             if (related != null && related.items != null) {
+                                val blacklist = listOf(
+                                    "full album", "album lengkap", "compilation", "kompilasi",
+                                    "1 hour", "2 hour", "3 hour", "1 jam", "2 jam",
+                                    "nonstop", "non stop", "discography", "best songs of",
+                                    "top 50", "top 100", "podcast", "audiobook"
+                                )
+
                                 for (item in related.items) {
                                     if (item is StreamInfoItem) {
                                         val itemUrl = item.url ?: ""
@@ -191,7 +198,12 @@ class MainActivity: AudioServiceActivity() {
                                             ""
                                         }
 
-                                        if (vId.isNotEmpty() && vId != videoId) {
+                                        val titleLower = (item.name ?: "").lowercase()
+                                        val isAlbum = blacklist.any { titleLower.contains(it) }
+                                        val dur = item.duration.toInt()
+                                        val isSongDuration = dur == 0 || (dur in 45..660)
+
+                                        if (vId.isNotEmpty() && vId != videoId && !isAlbum && isSongDuration) {
                                             val thumb = item.thumbnails?.firstOrNull()?.url 
                                                 ?: "https://i.ytimg.com/vi/$vId/hqdefault.jpg"
                                             list.add(mapOf(
@@ -199,7 +211,7 @@ class MainActivity: AudioServiceActivity() {
                                                 "title" to (item.name ?: "Unknown Title"),
                                                 "channelTitle" to (item.uploaderName ?: "Unknown Artist"),
                                                 "thumbnailUrl" to thumb,
-                                                "durationSeconds" to item.duration.toInt()
+                                                "durationSeconds" to dur
                                             ))
                                             if (list.size >= limit) break
                                         }

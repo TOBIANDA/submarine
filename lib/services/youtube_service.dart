@@ -1,4 +1,4 @@
-// lib/services/youtube_service.dart
+﻿// lib/services/youtube_service.dart
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -15,7 +15,7 @@ class YoutubeService {
 
   final Map<String, List<VideoItem>> _searchCache = {};
 
-  /// Search music tracks with guaranteed direct-playable YouTube video IDs
+  /// Search music tracks with guaranteed direct-playable YouTube video IDs, filtering out full albums & compilations
   Future<List<VideoItem>> searchVideos(String query, {int maxResults = 25}) async {
     final cleanQuery = query.trim().toLowerCase();
     final cacheKey = '${cleanQuery}_$maxResults';
@@ -23,7 +23,7 @@ class YoutubeService {
       return _searchCache[cacheKey]!;
     }
 
-    // ── Stage 1: YouTube Search (Real 11-char directly playable Video IDs) ──
+    // ── Stage 1: YouTube Search via YoutubeExplode ──
     try {
       final yt = YoutubeExplode();
       try {
@@ -32,7 +32,7 @@ class YoutubeService {
 
         for (final video in results) {
           final duration = video.duration?.inSeconds ?? 0;
-          videoItems.add(VideoItem(
+          final item = VideoItem(
             videoId: video.id.value,
             title: video.title,
             channelId: video.channelId.value,
@@ -41,7 +41,12 @@ class YoutubeService {
                 ? video.thumbnails.highResUrl
                 : video.thumbnails.mediumResUrl,
             durationSeconds: duration,
-          ));
+          );
+
+          // Filter out full albums, 1-hour compilations, and non-music long videos
+          if (item.isSingleSong) {
+            videoItems.add(item);
+          }
           if (videoItems.length >= maxResults) break;
         }
 
@@ -84,7 +89,7 @@ class YoutubeService {
     final keys = AppConstants.youtubeApiKeys.toList()..shuffle();
     for (final key in keys) {
       try {
-        final uri = Uri.parse('${AppConstants.youtubeBaseUrl}/search?part=snippet&type=video&maxResults=$maxResults&q=${Uri.encodeComponent(query)}&key=$key');
+        final uri = Uri.parse('${AppConstants.youtubeBaseUrl}/search?part=snippet&type=video&videoCategoryId=10&maxResults=${maxResults * 2}&q=${Uri.encodeComponent(query)}&key=$key');
         final response = await http.get(uri).timeout(const Duration(seconds: 6));
         
         if (response.statusCode == 200) {
@@ -118,14 +123,19 @@ class YoutubeService {
                durationSeconds = _parseIsoDuration(isoDuration);
              }
 
-             videoItems.add(VideoItem(
+             final vObj = VideoItem(
                videoId: videoId,
                title: snippet['title'] ?? '',
                channelId: snippet['channelId'] ?? '',
                channelTitle: snippet['channelTitle'] ?? '',
                thumbnailUrl: snippet['thumbnails']?['high']?['url'] ?? snippet['thumbnails']?['medium']?['url'] ?? '',
                durationSeconds: durationSeconds,
-             ));
+             );
+
+             if (vObj.isSingleSong) {
+               videoItems.add(vObj);
+             }
+             if (videoItems.length >= maxResults) break;
           }
           return videoItems;
         }
@@ -137,11 +147,11 @@ class YoutubeService {
   }
 
   Future<List<VideoItem>> getTrendingVideos({int maxResults = 15}) async {
-    return searchVideos('top hits indonesia 2025', maxResults: maxResults);
+    return searchVideos('top hits indonesia 2025 official audio', maxResults: maxResults);
   }
 
   Future<List<VideoItem>> getRelatedVideos(VideoItem currentVideo, {int maxResults = 10}) async {
-    final query = '${currentVideo.title} ${currentVideo.channelTitle}';
+    final query = '${currentVideo.title} ${currentVideo.channelTitle} official audio';
     return searchVideos(query, maxResults: maxResults);
   }
 
@@ -166,15 +176,22 @@ class YoutubeService {
   Future<List<VideoItem>> getChannelVideos(String channelId) async {
     final yt = YoutubeExplode();
     try {
-      final uploads = await yt.channels.getUploads(channelId).take(20).toList();
-      return uploads.map((v) => VideoItem(
-        videoId: v.id.value,
-        title: v.title,
-        channelId: v.channelId.value,
-        channelTitle: v.author,
-        thumbnailUrl: v.thumbnails.mediumResUrl,
-        durationSeconds: v.duration?.inSeconds ?? 0,
-      )).toList();
+      final uploads = await yt.channels.getUploads(channelId).take(25).toList();
+      final items = <VideoItem>[];
+      for (final v in uploads) {
+        final item = VideoItem(
+          videoId: v.id.value,
+          title: v.title,
+          channelId: v.channelId.value,
+          channelTitle: v.author,
+          thumbnailUrl: v.thumbnails.mediumResUrl,
+          durationSeconds: v.duration?.inSeconds ?? 0,
+        );
+        if (item.isSingleSong) {
+          items.add(item);
+        }
+      }
+      return items;
     } catch (_) {
       return [];
     } finally {
