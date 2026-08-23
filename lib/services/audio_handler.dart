@@ -8,20 +8,11 @@ import 'package:just_audio/just_audio.dart';
 
 /// BackgroundAudioHandler - provides native background audio service & system notification controls via NewPipeExtractor
 class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
-  final AudioPlayer _player = AudioPlayer(
-    audioLoadConfiguration: const AudioLoadConfiguration(
-      androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 30),
-        maxBufferDuration: Duration(seconds: 600), // Buffer entire song (up to 10 mins) smoothly
-        bufferForPlaybackDuration: Duration(milliseconds: 1000),
-        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 2000),
-        prioritizeTimeOverSizeThresholds: true,
-        backBufferDuration: Duration(seconds: 60),
-      ),
-    ),
-  );
+  final AudioPlayer _player = AudioPlayer();
 
   static const _extractorChannel = MethodChannel('com.submarine/extractor');
+  String? _currentVideoId;
+  int _retryCount = 0;
 
   BackgroundAudioHandler() {
     _init();
@@ -80,6 +71,31 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
         }
       }
     });
+
+    // Handle playback errors and auto-recover with fresh stream URL
+    _player.playbackEventStream.listen(
+      (event) {},
+      onError: (Object e, StackTrace st) {
+        debugPrint('[AudioHandler] Playback error event: $e');
+        _handleStreamRecovery();
+      },
+    );
+  }
+
+  Future<void> _handleStreamRecovery() async {
+    final vId = _currentVideoId;
+    final item = mediaItem.value;
+    if (vId != null && item != null && _retryCount < 2) {
+      _retryCount++;
+      final currentPos = _player.position;
+      debugPrint('[AudioHandler] Auto-recovering stream for $vId at $currentPos (attempt $_retryCount)...');
+      try {
+        await Future.delayed(const Duration(milliseconds: 500));
+        await playOnline(vId, item, startPosition: currentPos);
+      } catch (e) {
+        debugPrint('[AudioHandler] Stream recovery failed: $e');
+      }
+    }
   }
 
   /// Update system notification with current song details and playing state
@@ -109,12 +125,14 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
     ));
   }
 
-  /// Play online song natively with ExoPlayer using LockCachingAudioSource to prevent mid-song dropouts
-  Future<void> playOnline(String videoId, MediaItem item) async {
+  /// Play online song natively with ExoPlayer direct streaming without corrupted partial caching
+  Future<void> playOnline(String videoId, MediaItem item, {Duration? startPosition}) async {
+    _currentVideoId = videoId;
+    _retryCount = 0;
     mediaItem.add(item);
     try {
       await _player.stop();
-      debugPrint('[AudioHandler] Calling native NewPipeExtractor for $videoId...');
+      debugPrint('[AudioHandler] Extracting stream for $videoId via NewPipeExtractor...');
       
       final result = await _extractorChannel.invokeMethod<Map>('getAudioStreamUrl', {
         'videoId': videoId,
@@ -127,20 +145,19 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
       final streamUrl = result['url'] as String;
       final bitrate = result['bitrate'];
       final format = result['format'];
-      debugPrint('[AudioHandler] NewPipe stream acquired: $format ($bitrate bps)');
+      debugPrint('[AudioHandler] Playing native stream: $format ($bitrate bps)');
 
-      // Use LockCachingAudioSource with full YouTube headers to download & cache the audio in background
+      // Direct ExoPlayer native streaming with full standard headers
       await _player.setAudioSource(
-        LockCachingAudioSource(
+        AudioSource.uri(
           Uri.parse(streamUrl),
           headers: const {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.youtube.com/',
             'Origin': 'https://www.youtube.com',
-            'Accept': '*/*',
-            'Connection': 'keep-alive',
           },
         ),
+        initialPosition: startPosition,
         preload: true,
       );
       await _player.play();
@@ -152,6 +169,7 @@ class BackgroundAudioHandler extends BaseAudioHandler with SeekHandler {
 
   /// Play offline local file
   Future<void> playFile(String path, MediaItem item) async {
+    _currentVideoId = null;
     mediaItem.add(item);
     try {
       await _player.stop();
