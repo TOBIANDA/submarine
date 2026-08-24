@@ -1,3 +1,4 @@
+import 'services/download_service.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +13,7 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  DownloadService().init();
 
   // Init FlutterDownloader - wrapped in try/catch agar tidak crash jika gagal
   try {

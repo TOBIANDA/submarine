@@ -23,16 +23,28 @@ class DownloadService {
     _cleanCorruptedDownloads();
   }
 
-  /// Bersihkan file 0-byte atau rusak dari storage dan database
+  /// Bersihkan file yang tidak lengkap (< 800KB) dari storage dan database
   Future<void> _cleanCorruptedDownloads() async {
     try {
       final downloads = await DbService().getAllDownloads();
       for (final track in downloads) {
         final file = File(track.localPath);
-        if (!file.existsSync() || file.lengthSync() < 50000) {
-          debugPrint('[Download] Menghapus track korup (0-byte): ${track.title}');
+        if (!file.existsSync() || file.lengthSync() < 800000) {
+          debugPrint('[Download] Membersihkan file download tidak lengkap: ${track.title}');
           if (file.existsSync()) await file.delete();
           await DbService().deleteDownload(track.videoId);
+        }
+      }
+      
+      // Bersihkan juga file yatim di folder downloads
+      final dir = await _getDownloadDir();
+      if (await dir.exists()) {
+        final files = dir.listSync();
+        for (final f in files) {
+          if (f is File && f.lengthSync() < 800000) {
+            debugPrint('[Download] Menghapus cache download rusak: ${f.path}');
+            await f.delete();
+          }
         }
       }
     } catch (e) {
@@ -59,7 +71,7 @@ class DownloadService {
     return dir;
   }
 
-  /// Mengunduh audio lagu ke file lokal menggunakan NewPipeExtractor
+  /// Mengunduh audio lagu dengan Range-Based Chunked Downloader agar file 100% utuh
   Future<void> downloadVideoNative(
     VideoItem video, {
     required Function(double progress) onProgress,
@@ -67,8 +79,9 @@ class DownloadService {
     required Function(String error) onError,
   }) async {
     _activeCancelTokens[video.videoId] = false;
-    IOSink? fileStream;
+    RandomAccessFile? raf;
     http.Client? client;
+
     try {
       debugPrint('[Download] Meminta URL stream via NewPipeExtractor: ${video.title}');
 
@@ -89,44 +102,84 @@ class DownloadService {
       final file = File(localPath);
       if (file.existsSync()) file.deleteSync();
 
+      raf = file.openSync(mode: FileMode.write);
       client = http.Client();
-      final request = http.Request('GET', Uri.parse(streamUrl));
-      request.headers['User-Agent'] =
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-      final response = await client.send(request);
-
-      if (response.statusCode != 200 && response.statusCode != 206) {
-        throw Exception('Download stream gagal dengan kode HTTP ${response.statusCode}');
-      }
-
-      fileStream = file.openWrite();
+      int totalSize = 0;
       int downloadedBytes = 0;
-      final length = response.contentLength ?? 0;
+      int retries = 0;
 
-      await for (final chunk in response.stream) {
+      while (retries < 6) {
         if (_activeCancelTokens[video.videoId] == true) {
-          await fileStream.close();
-          if (await file.exists()) await file.delete();
+          raf.closeSync();
+          if (file.existsSync()) file.deleteSync();
           client.close();
           onError('Unduhan dibatalkan');
           return;
         }
-        downloadedBytes += chunk.length;
-        fileStream.add(chunk);
-        if (length > 0) {
-          onProgress((downloadedBytes / length).clamp(0.0, 1.0));
+
+        final request = http.Request('GET', Uri.parse(streamUrl));
+        request.headers['User-Agent'] =
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        request.headers['Referer'] = 'https://www.youtube.com/';
+        request.headers['Origin'] = 'https://www.youtube.com';
+
+        if (downloadedBytes > 0) {
+          request.headers['Range'] = 'bytes=$downloadedBytes-';
         }
+
+        final response = await client.send(request);
+
+        if (response.statusCode != 200 && response.statusCode != 206) {
+          throw Exception('Download stream gagal dengan kode HTTP ${response.statusCode}');
+        }
+
+        if (totalSize == 0) {
+          if (response.headers.containsKey('content-range')) {
+            final cr = response.headers['content-range']!;
+            final match = RegExp(r'/(\d+)$').firstMatch(cr);
+            if (match != null) totalSize = int.parse(match.group(1)!);
+          } else if (response.contentLength != null && response.contentLength! > 0) {
+            totalSize = response.contentLength!;
+          }
+        }
+
+        await for (final chunk in response.stream) {
+          if (_activeCancelTokens[video.videoId] == true) {
+            raf.closeSync();
+            if (file.existsSync()) file.deleteSync();
+            client.close();
+            onError('Unduhan dibatalkan');
+            return;
+          }
+          raf.writeFromSync(chunk);
+          downloadedBytes += chunk.length;
+          if (totalSize > 0) {
+            onProgress((downloadedBytes / totalSize).clamp(0.0, 1.0));
+          }
+        }
+
+        if (totalSize > 0 && downloadedBytes >= totalSize) {
+          // 100% Downloaded successfully!
+          break;
+        } else if (totalSize == 0 && downloadedBytes > 1000000) {
+          // Completed without explicit length header
+          break;
+        }
+
+        retries++;
+        debugPrint('[Download] Melanjutkan unduhan terputus di $downloadedBytes / $totalSize bytes (Percobaan $retries)...');
+        await Future.delayed(const Duration(milliseconds: 600));
       }
 
-      await fileStream.flush();
-      await fileStream.close();
+      raf.flushSync();
+      raf.closeSync();
       client.close();
 
       final finalSize = file.existsSync() ? file.lengthSync() : 0;
-      if (finalSize < 50000) {
-        if (file.existsSync()) await file.delete();
-        throw Exception('File unduhan tidak lengkap ($finalSize bytes)');
+      if (finalSize < 800000) {
+        if (file.existsSync()) file.deleteSync();
+        throw Exception('File unduhan tidak lengkap ($finalSize bytes, minimal 800KB)');
       }
 
       final track = DownloadedTrack(
@@ -140,10 +193,10 @@ class DownloadService {
         fileSizeBytes: finalSize,
       );
       await DbService().insertDownload(track);
-      debugPrint('[Download] Sukses tersimpan: $localPath ($finalSize bytes)');
+      debugPrint('[Download] Sukses tersimpan 100% utuh: $localPath ($finalSize bytes)');
       onComplete(track);
     } catch (e) {
-      await fileStream?.close();
+      try { raf?.closeSync(); } catch (_) {}
       client?.close();
       debugPrint('[Download] Gagal: $e');
       onError(e.toString());

@@ -273,24 +273,17 @@ class PlayerService extends ChangeNotifier {
   Future<String?> _getOfflineFilePath(String videoId) async {
     try {
       final downloaded = await DbService().getDownload(videoId);
-      if (downloaded != null && await File(downloaded.localPath).exists()) {
-        return downloaded.localPath;
-      }
-
-      final appDir = await getApplicationDocumentsDirectory();
-      for (final ext in ['m4a', 'webm', 'opus', 'mp3', 'mp4']) {
-        final f = File('${appDir.path}/downloads/$videoId.$ext');
-        if (await f.exists() && (await f.length()) > 10000) {
-          return f.path;
-        }
-      }
-
-      final extDir = await getExternalStorageDirectory();
-      if (extDir != null) {
-        for (final ext in ['m4a', 'webm', 'opus', 'mp3', 'mp4']) {
-          final f = File('${extDir.path}/downloads/$videoId.$ext');
-          if (await f.exists() && (await f.length()) > 10000) {
-            return f.path;
+      if (downloaded != null) {
+        final f = File(downloaded.localPath);
+        if (await f.exists()) {
+          final size = await f.length();
+          // Minimal 800KB for complete audio file
+          if (size >= 800000) {
+            return downloaded.localPath;
+          } else {
+            debugPrint('[Player] Incomplete offline file ($size bytes). Deleting: ${downloaded.title}');
+            await f.delete();
+            await DbService().deleteDownload(videoId);
           }
         }
       }

@@ -17,7 +17,7 @@
 
     <application
         android:usesCleartextTraffic="true"
-        android:label="Submarine"
+        android:label="Submarine VIP"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
