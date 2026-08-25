@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/video_item.dart';
 import '../services/db_service.dart';
+import '../services/recommendation_service.dart';
 import '../services/youtube_service.dart';
 
 /// Kategori konten ala GoTube / Spotify
@@ -55,10 +56,10 @@ extension HomeCategoryExtension on HomeCategory {
 // Provider untuk kategori aktif
 final activeCategoryProvider = StateProvider<HomeCategory>((ref) => HomeCategory.all);
 
-// ── Daily Mix Provider (Taste-Based SQL Clustering + 24h SQLite Cache) ──
+// 🎵 Daily Mix Provider (Last.fm Graph ML + On-Device Affinity Scoring + 24h SQLite Cache) 🎵
 final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async {
   final dbService = DbService();
-  final ytService = YoutubeService();
+  final recommender = RecommendationService();
 
   // 1. Check local SQLite cache first (24h TTL)
   final cached = await dbService.getCachedRecommendations('daily_mix');
@@ -66,54 +67,8 @@ final dailyMixProvider = FutureProvider.autoDispose<List<VideoItem>>((ref) async
     return cached.where((s) => s.isSingleSong).toList();
   }
 
-  final mix = <VideoItem>[];
-  final seenIds = <String>{};
-
-  // 2. Query top favorite artists based on completion rate and play count
-  final topArtists = await dbService.getTopTasteArtists(limit: 3);
-
-  if (topArtists.isNotEmpty) {
-    for (final artist in topArtists) {
-      try {
-        // Bias search towards official artist audio & topic singles
-        final cleanArtist = artist.replaceAll(RegExp(r'\s*-\s*Topic', caseSensitive: false), '').trim();
-        final songs = await ytService.searchVideos('$cleanArtist official audio', maxResults: 6);
-        for (final s in songs) {
-          if (s.isSingleSong && seenIds.add(s.videoId)) {
-            mix.add(s);
-          }
-        }
-      } catch (_) {}
-    }
-  }
-
-  // 3. Supplement with related tracks from last played song
-  final lastPlayed = await dbService.getLastPlayed();
-  if (lastPlayed != null) {
-    try {
-      final related = await ytService.getRelatedVideos(lastPlayed.toVideoItem(), maxResults: 8);
-      for (final s in related) {
-        if (s.isSingleSong && seenIds.add(s.videoId)) {
-          mix.add(s);
-        }
-      }
-    } catch (_) {}
-  }
-
-  // 4. Fallback if user has no listening history yet
-  if (mix.isEmpty) {
-    try {
-      final trending = await ytService.getTrendingVideos(maxResults: 15);
-      for (final s in trending) {
-        if (s.isSingleSong && seenIds.add(s.videoId)) {
-          mix.add(s);
-        }
-      }
-    } catch (_) {}
-  }
-
-  // Shuffle slightly for organic listening experience
-  mix.shuffle(Random());
+  // 2. Fetch intelligent personalized discovery mix
+  final mix = await recommender.getPersonalizedDiscoveryMix(limit: 15);
 
   // Save to 24h SQLite cache
   if (mix.isNotEmpty) {
@@ -128,6 +83,7 @@ final recommendationProvider = FutureProvider.autoDispose<List<VideoItem>>((ref)
   final category = ref.watch(activeCategoryProvider);
   final ytService = YoutubeService();
   final dbService = DbService();
+  final recommender = RecommendationService();
   final cacheKey = 'cat_${category.name}';
 
   // Check 12h cache
@@ -143,8 +99,8 @@ final recommendationProvider = FutureProvider.autoDispose<List<VideoItem>>((ref)
       final lastPlayed = await dbService.getLastPlayed();
       if (lastPlayed != null) {
         try {
-          final related = await ytService.getRelatedVideos(lastPlayed.toVideoItem(), maxResults: 15);
-          results = related.where((s) => s.isSingleSong).toList();
+          // Use Last.fm similarity graph for high-precision music recommendations
+          results = await recommender.getSmartSongRadio(lastPlayed.toVideoItem(), limit: 15);
         } catch (_) {}
       }
       if (results.isEmpty) {

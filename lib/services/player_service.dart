@@ -12,6 +12,7 @@ import '../models/play_history.dart';
 import '../services/db_service.dart';
 import '../services/audio_handler.dart';
 import '../services/license_service.dart';
+import '../services/recommendation_service.dart';
 
 enum RepeatMode { none, all, one }
 
@@ -115,47 +116,26 @@ class PlayerService extends ChangeNotifier {
   /// Prefetch 5 related/automix radio tracks from YouTube Music when queue is low
   Future<void> _prefetchRadioTracks(String seedVideoId) async {
     if (_isPrefetchingRadio) return;
-    
-    // Only prefetch if we are at or near the end of the current playlist
+    final cur = currentVideo;
+    if (cur == null) return;
+
     final remainingInQueue = _playlist.length - 1 - _currentIndex;
     if (remainingInQueue > 2) return;
 
     _isPrefetchingRadio = true;
     try {
-      debugPrint('[Player] Pre-fetching Automix radio tracks for seed: $seedVideoId (progress >= 70%)');
-      final List? results = await _extractorChannel.invokeMethod<List>('getRadioTracks', {
-        'videoId': seedVideoId,
-        'limit': 5,
-      });
+      debugPrint('[Player] Pre-fetching Smart ML radio tracks for: ${cur.title}');
+      final smartTracks = await RecommendationService().getSmartSongRadio(cur, limit: 5);
+      final existingIds = _playlist.map((e) => e.videoId).toSet();
+      final newTracks = smartTracks.where((t) => !existingIds.contains(t.videoId)).toList();
 
-      if (results != null && results.isNotEmpty) {
-        final existingIds = _playlist.map((e) => e.videoId).toSet();
-        final newTracks = <VideoItem>[];
-
-        for (final item in results) {
-          if (item is Map) {
-            final vId = item['videoId'] as String? ?? '';
-            if (vId.isNotEmpty && !existingIds.contains(vId)) {
-              newTracks.add(VideoItem(
-                videoId: vId,
-                title: item['title'] as String? ?? 'Unknown Title',
-                channelTitle: item['channelTitle'] as String? ?? 'Unknown Artist',
-                thumbnailUrl: item['thumbnailUrl'] as String? ?? 'https://i.ytimg.com/vi/$vId/hqdefault.jpg',
-                durationSeconds: item['durationSeconds'] as int? ?? 0,
-              ));
-              existingIds.add(vId);
-            }
-          }
-        }
-
-        if (newTracks.isNotEmpty) {
-          _playlist.addAll(newTracks);
-          debugPrint('[Player] Added ${newTracks.length} continuous radio tracks to queue!');
-          notifyListeners();
-        }
+      if (newTracks.isNotEmpty) {
+        _playlist.addAll(newTracks);
+        debugPrint('[Player] Added ${newTracks.length} Smart ML radio tracks to queue!');
+        notifyListeners();
       }
     } catch (e) {
-      debugPrint('[Player] Pre-fetch radio error (non-fatal): $e');
+      debugPrint('[Player] Pre-fetch radio error: $e');
     } finally {
       _isPrefetchingRadio = false;
     }
