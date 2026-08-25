@@ -52,8 +52,8 @@ class PlayerService extends ChangeNotifier {
   bool get isShuffle => _isShuffle;
   RepeatMode get repeatMode => _repeatMode;
   bool get audioFocusMode => _audioFocusMode;
-  bool get hasNext => _playlist.isNotEmpty && _currentIndex < _playlist.length - 1;
-  bool get hasPrevious => _playlist.isNotEmpty && _currentIndex > 0;
+  bool get hasNext => _playlist.isNotEmpty;
+  bool get hasPrevious => _playlist.isNotEmpty;
 
   Stream<Duration> get positionStream => audioPlayer.positionStream;
   Stream<Duration?> get durationStream => audioPlayer.durationStream;
@@ -369,16 +369,9 @@ class PlayerService extends ChangeNotifier {
   void _onTrackEnded() {
     if (_repeatMode == RepeatMode.one) {
       _playCurrent();
-    } else if (hasNext) {
+    } else if (_playlist.isNotEmpty) {
+      // Seamlessly loop from tail back to head
       playNext();
-    } else {
-      // End of playlist: automatically trigger radio play if we have current video
-      final cur = currentVideo;
-      if (cur != null) {
-        _prefetchRadioTracks(cur.videoId).then((_) {
-          if (hasNext) playNext();
-        });
-      }
     }
   }
 }
