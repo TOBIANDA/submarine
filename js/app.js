@@ -282,15 +282,15 @@ function renderTracks(tracks) {
   }
 
   container.innerHTML = tracks.map((track, idx) => `
-    <div class="track-card" onclick="playTrackAt(${idx})">
-      <div class="card-thumb-wrap">
-        <img class="card-thumb" src="${track.thumbnailUrl}" alt="${escapeHtml(track.title)}" loading="lazy" />
-        <div class="play-hover-btn">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+    <div class="music-card" onclick="playTrackAt(${idx})">
+      <div class="card-image-wrap">
+        <img class="card-image" src="${track.thumbnailUrl || `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`}" alt="${escapeHtml(track.title)}" loading="lazy" />
+        <div class="card-play-hover">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         </div>
       </div>
-      <div class="card-title">${escapeHtml(track.title)}</div>
-      <div class="card-artist">${escapeHtml(track.channelTitle || track.artist || 'Unknown Artist')}</div>
+      <div class="card-song-title">${escapeHtml(track.title)}</div>
+      <div class="card-song-artist">${escapeHtml(track.channelTitle || track.artist || 'Unknown Artist')}</div>
     </div>
   `).join('');
 
