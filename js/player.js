@@ -117,10 +117,25 @@ class SubmarinePlayer {
     const track = this.currentTrack;
     if (!track) return;
 
-    // Update UI Elements
-    document.getElementById('player-thumb').src = track.thumbnailUrl || track.thumbnail || `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
-    document.getElementById('player-title').textContent = track.title || 'Unknown Title';
-    document.getElementById('player-artist').textContent = track.channelTitle || track.artist || 'Unknown Artist';
+    const thumb = track.thumbnailUrl || track.thumbnail || `https://i.ytimg.com/vi/${track.videoId}/hqdefault.jpg`;
+    const title = track.title || 'Unknown Title';
+    const artist = track.channelTitle || track.artist || 'Unknown Artist';
+
+    // Update Bottom Dock Player
+    const pThumb = document.getElementById('player-thumb');
+    const pTitle = document.getElementById('player-title');
+    const pArtist = document.getElementById('player-artist');
+    if (pThumb) pThumb.src = thumb;
+    if (pTitle) pTitle.textContent = title;
+    if (pArtist) pArtist.textContent = artist;
+
+    // Update Right Sidebar Now Playing Panel
+    const rThumb = document.getElementById('right-panel-thumb');
+    const rTitle = document.getElementById('right-panel-title');
+    const rArtist = document.getElementById('right-panel-artist');
+    if (rThumb) rThumb.src = thumb;
+    if (rTitle) rTitle.textContent = title;
+    if (rArtist) rArtist.textContent = artist;
 
     const likeBtn = document.getElementById('btn-like-current');
     if (likeBtn) {
@@ -128,12 +143,40 @@ class SubmarinePlayer {
       likeBtn.classList.toggle('active', isLiked);
     }
 
+    this.renderQueuePanel();
+
     if (this.ytPlayer && this.isReady) {
       this.ytPlayer.loadVideoById(track.videoId);
       this.ytPlayer.playVideo();
       this.isPlaying = true;
       this.updatePlayPauseIcon();
     }
+  }
+
+  renderQueuePanel() {
+    const container = document.getElementById('queue-container');
+    if (!container) return;
+    if (this.queue.length <= 1) {
+      container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 6px;">Antrean kosong. Putar playlist untuk melihat antrean.</div>';
+      return;
+    }
+
+    // Get up to 6 next upcoming tracks
+    const upcoming = [];
+    for (let i = 1; i <= Math.min(6, this.queue.length - 1); i++) {
+      const idx = (this.currentIndex + i) % this.queue.length;
+      upcoming.push({ track: this.queue[idx], index: idx });
+    }
+
+    container.innerHTML = upcoming.map(item => `
+      <div class="queue-item" onclick="window.submarinePlayer.loadQueue(window.submarinePlayer.queue, ${item.index})">
+        <img class="queue-thumb" src="${item.track.thumbnailUrl || `https://i.ytimg.com/vi/${item.track.videoId}/hqdefault.jpg`}" alt="${item.track.title}" />
+        <div class="queue-meta">
+          <div class="queue-title">${item.track.title}</div>
+          <div class="queue-artist">${item.track.channelTitle || item.track.artist || ''}</div>
+        </div>
+      </div>
+    `).join('');
   }
 
   play() {

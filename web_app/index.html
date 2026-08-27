@@ -3,187 +3,213 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Submarine - AI Curated Music Player & Stream</title>
-  <meta name="description" content="Submarine Music Web - Pemutar musik cerdas berbasis AI Curation & Last.fm Similarity Graph tanpa iklan." />
+  <title>Submarine - Modern AI Music Platform</title>
+  <meta name="description" content="Submarine Web - Platform musik modern dengan AI Playlist Curation & Last.fm ML Recommendations tanpa iklan." />
   <link rel="icon" href="assets/logo.png" type="image/png" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
 
-  <!-- Audio Waveform Canvas Visualizer -->
-  <canvas id="visualizer-canvas"></canvas>
-
-  <div class="app-container">
+  <div class="platform-wrapper">
     <!-- ==========================================
-         SIDEBAR NAVIGATION
+         1. LEFT SIDEBAR NAVIGATION
          ========================================== -->
-    <aside class="sidebar">
-      <div class="brand">
-        <img class="brand-logo" src="assets/logo.png" alt="Submarine Logo" />
-        <span class="brand-name">Submarine</span>
+    <aside class="left-sidebar">
+      <div class="brand-badge">
+        <img class="brand-icon" id="sidebar-logo" src="assets/logo.png" onerror="this.onerror=null; this.src='https://raw.githubusercontent.com/TOBIANDA/submarine/main/submarine.png';" alt="Submarine" />
+        <span class="brand-text">Submarine</span>
       </div>
 
-      <div class="nav-group">
-        <span class="nav-title">Menu Utama</span>
-        <a class="nav-item active" data-tab="home" href="#">
+      <div class="menu-group">
+        <span class="menu-label">Menu Utama</span>
+        <a class="nav-link active" data-tab="home" href="#">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-          <span>Beranda</span>
+          <span>Discover</span>
         </a>
-        <a class="nav-item" data-tab="explore" href="#">
+        <a class="nav-link" data-tab="explore" href="#">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
-          <span>Eksplorasi</span>
+          <span>Top Charts</span>
         </a>
-        <a class="nav-item" data-tab="recommendation" href="#">
+        <a class="nav-link" data-tab="recommendation" href="#">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 14.93V17a1 1 0 0 1-2 0v-.07A7 7 0 1 1 19 10a1 1 0 0 1-2 0 5 5 0 1 0-4 4.93z"/></svg>
-          <span>ML Rekomendasi</span>
+          <span>Smart ML Radio</span>
         </a>
-        <a class="nav-item" data-tab="library" href="#">
+        <a class="nav-link" data-tab="library" href="#">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-          <span>Koleksi Saya</span>
+          <span>Koleksi Favorit</span>
         </a>
       </div>
 
-      <!-- Mobile App Download Promo -->
-      <div class="sidebar-footer">
-        <p>Gunakan Aplikasi Android</p>
-        <a class="btn-apk-download" href="https://github.com/TOBIANDA/submarine/raw/main/output/Submarine-VIP.apk" target="_blank" download>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <!-- App Download Card -->
+      <div class="sidebar-app-box">
+        <h4>Submarine Android</h4>
+        <p>Streaming & download offline di smartphone kamu.</p>
+        <a class="btn-download-app" href="https://github.com/TOBIANDA/submarine/raw/main/output/Submarine-VIP.apk" target="_blank" download>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span>Unduh APK VIP</span>
         </a>
       </div>
     </aside>
 
     <!-- ==========================================
-         MAIN VIEWPORT
+         2. CENTER MAIN CONTENT VIEWPORT
          ========================================== -->
-    <main class="main-content">
+    <main class="center-viewport">
       <!-- Top Action Bar -->
-      <header class="top-bar">
-        <div class="search-box">
-          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="search-input" placeholder="Cari lagu, artis, atau playlist favoritmu..." autocomplete="off" />
+      <header class="platform-top-bar">
+        <div class="search-field-wrap">
+          <svg class="search-field-icon" viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="search-input" placeholder="Cari lagu, artis, atau genre favoritmu..." autocomplete="off" />
         </div>
 
-        <div class="top-actions">
-          <button class="btn-ai-create" id="btn-open-ai-modal">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            <span>AI Playlist Creator</span>
-          </button>
-        </div>
+        <button class="btn-ai-magic" id="btn-open-ai-modal">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span>AI Playlist Creator</span>
+        </button>
       </header>
 
-      <!-- Category Filter Pills -->
-      <div class="category-pills">
-        <button class="pill-btn active" data-category="all">Semua</button>
-        <button class="pill-btn" data-category="trending">🔥 Trending</button>
-        <button class="pill-btn" data-category="pop">Pop Hits</button>
-        <button class="pill-btn" data-category="acoustic">Akustik Santai</button>
-        <button class="pill-btn" data-category="rock">Indie & Rock</button>
-        <button class="pill-btn" data-category="rnb">R&B / Soul</button>
+      <!-- Mood & Genre Filter Chips -->
+      <div class="mood-chips-scroll">
+        <button class="mood-chip active" data-category="all">Semua Musik</button>
+        <button class="mood-chip" data-category="trending">🔥 Trending Hits</button>
+        <button class="mood-chip" data-category="pop">Pop Billboard</button>
+        <button class="mood-chip" data-category="acoustic">Acoustic Chill</button>
+        <button class="mood-chip" data-category="rock">Alternative & Rock</button>
+        <button class="mood-chip" data-category="rnb">R&B / Soul</button>
       </div>
 
-      <!-- Hero Highlight Banner -->
-      <section class="hero-banner" id="hero-banner">
-        <div class="hero-content">
-          <span class="hero-tag">✨ Rekomendasi Hari Ini</span>
-          <h1 class="hero-title">Dengarkan Musik Berkualitas Tinggi Bebas Iklan</h1>
-          <p class="hero-desc">Didukung oleh algoritma Machine Learning Last.fm Graph dan kurasi pintar Groq AI.</p>
-          <div class="hero-buttons">
-            <button class="btn-primary" onclick="window.submarinePlayer.playNext()">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-              <span>Putar Sekarang</span>
-            </button>
-          </div>
+      <!-- Hero Spotlight Banner -->
+      <section class="hero-spotlight" id="hero-spotlight">
+        <div class="spotlight-tag">✨ Featured Selection</div>
+        <h1 class="spotlight-title">Rasakan Pengalaman Audio Modern & Cerdas</h1>
+        <p class="spotlight-desc">Didukung oleh algoritma Machine Learning Last.fm Audio Graph dan kurasi playlist pintar Groq LLM.</p>
+        <div class="spotlight-actions">
+          <button class="btn-spotlight-play" onclick="window.submarinePlayer.playNext()">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <span>Mulai Dengarkan</span>
+          </button>
         </div>
       </section>
 
-      <!-- Dynamic Section Title & Tracks Grid -->
+      <!-- Track Grid -->
       <section>
-        <div class="section-header">
-          <h2 class="section-title" id="main-section-title">🔥 Musik Populer & Trending</h2>
-          <span class="section-badge">HD Audio</span>
+        <div class="section-headline">
+          <h3 id="main-section-title">🔥 Trending & Populer Hari Ini</h3>
         </div>
-        <div class="tracks-grid" id="tracks-container">
-          <!-- Dynamic Track Cards Injected by JS -->
+        <div class="platform-track-grid" id="tracks-container">
+          <!-- Dynamically Injected Track Cards -->
         </div>
       </section>
     </main>
+
+    <!-- ==========================================
+         3. RIGHT SIDEBAR (Now Playing & Up Next)
+         ========================================== -->
+    <aside class="right-sidebar">
+      <div class="now-playing-panel-title">
+        <span>Sedang Diputar</span>
+        <button class="btn-player-action" id="btn-like-current" title="Sukai Lagu">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        </button>
+      </div>
+
+      <!-- Large Now Playing Artwork Card -->
+      <div class="now-playing-disc-card">
+        <div class="disc-artwork-wrap">
+          <img class="disc-artwork" id="right-panel-thumb" src="assets/logo.png" onerror="this.onerror=null; this.src='https://raw.githubusercontent.com/TOBIANDA/submarine/main/submarine.png';" alt="Artwork" />
+        </div>
+        <div class="disc-track-title" id="right-panel-title">Pilih Lagu untuk Diputar</div>
+        <div class="disc-track-artist" id="right-panel-artist">Submarine Music Platform</div>
+
+        <!-- Live Audio Wave Equalizer Animation -->
+        <div class="sound-equalizer">
+          <span class="eq-bar"></span>
+          <span class="eq-bar"></span>
+          <span class="eq-bar"></span>
+          <span class="eq-bar"></span>
+          <span class="eq-bar"></span>
+        </div>
+      </div>
+
+      <!-- Up Next Queue -->
+      <div class="queue-header">Antrean Lagu Berikutnya</div>
+      <div class="queue-items-list" id="queue-container">
+        <!-- Injected Queue Items -->
+      </div>
+    </aside>
   </div>
 
   <!-- ==========================================
        AI PLAYLIST CREATOR MODAL
        ========================================== -->
   <div class="modal-overlay" id="ai-modal">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3 class="modal-title">🤖 AI Playlist Creator</h3>
-        <button class="modal-close" id="btn-close-ai-modal">&times;</button>
+    <div class="modal-content-card">
+      <div class="modal-header-row">
+        <h3 class="modal-title-text">🤖 AI Playlist Creator</h3>
+        <button class="btn-player-action" id="btn-close-ai-modal" style="font-size: 24px;">&times;</button>
       </div>
-      <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px;">
+      <p style="font-size: 13px; color: var(--text-dim); margin-bottom: 14px;">
         Ketik deskripsi suasana lagu (misal: <i>"Lagu pop akustik senja buat belajar"</i>) atau <b>tempel langsung daftar 50 lagu</b> yang kamu miliki!
       </p>
-      <textarea class="modal-prompt-input" id="ai-prompt-input" placeholder="Tulis instruksi atau paste daftar lagu di sini..."></textarea>
-      <button class="btn-primary" id="btn-generate-ai" style="width: 100%; justify-content: center;">
+      <textarea class="modal-prompt-area" id="ai-prompt-input" placeholder="Tulis instruksi atau paste daftar lagu di sini..."></textarea>
+      <button class="btn-spotlight-play" id="btn-generate-ai" style="width: 100%; justify-content: center;">
         <span>✨ Buat Playlist Sekarang</span>
       </button>
     </div>
   </div>
 
-  <!-- Toast Container -->
-  <div class="toast-container" id="toast-container"></div>
+  <!-- Toast Wrap -->
+  <div class="toast-wrap" id="toast-container"></div>
 
-  <!-- Hidden YouTube IFrame Container -->
+  <!-- Hidden YouTube IFrame -->
   <div id="yt-player-container"></div>
 
   <!-- ==========================================
-       PERSISTENT BOTTOM PLAYER BAR
+       4. FLOATING DOCK BOTTOM PLAYER BAR
        ========================================== -->
-  <footer class="player-bar">
+  <footer class="dock-player">
     <!-- Left: Track Details -->
-    <div class="player-track-info">
-      <img class="player-thumb" id="player-thumb" src="assets/logo.png" alt="Track Art" />
-      <div class="player-meta">
-        <div class="player-title" id="player-title">Pilih Lagu untuk Diputar</div>
-        <div class="player-artist" id="player-artist">Submarine Music Web</div>
+    <div class="player-left-meta">
+      <img class="player-left-thumb" id="player-thumb" src="assets/logo.png" onerror="this.onerror=null; this.src='https://raw.githubusercontent.com/TOBIANDA/submarine/main/submarine.png';" alt="Track Art" />
+      <div class="player-left-texts">
+        <div class="player-dock-title" id="player-title">Pilih Lagu untuk Diputar</div>
+        <div class="player-dock-artist" id="player-artist">Submarine Music</div>
       </div>
-      <button class="btn-ctrl" id="btn-like-current" title="Sukai Lagu" style="margin-left: 8px;">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-      </button>
     </div>
 
-    <!-- Center: Main Playback Controls -->
-    <div class="player-center">
-      <div class="control-buttons">
-        <button class="btn-ctrl" id="btn-shuffle" title="Acak Lagu">
+    <!-- Center: Playback Controls & Scrubber -->
+    <div class="player-dock-center">
+      <div class="player-buttons-row">
+        <button class="btn-player-action" id="btn-shuffle" title="Acak Lagu">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
         </button>
-        <button class="btn-ctrl" id="btn-prev" title="Lagu Sebelumnya">
+        <button class="btn-player-action" id="btn-prev" title="Lagu Sebelumnya">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
         </button>
-        <button class="btn-ctrl btn-play-pause" id="btn-play-pause" title="Play/Pause">
+        <button class="btn-player-action btn-player-main-play" id="btn-play-pause" title="Play/Pause">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         </button>
-        <button class="btn-ctrl" id="btn-next" title="Lagu Selanjutnya">
+        <button class="btn-player-action" id="btn-next" title="Lagu Selanjutnya">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
-        <button class="btn-ctrl active" id="btn-repeat" title="Ulang Playlist (Tail-to-Head Loop)">
+        <button class="btn-player-action active" id="btn-repeat" title="Ulang Playlist (Tail-to-Head Loop)">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
         </button>
       </div>
 
-      <!-- Progress Timeline Slider -->
-      <div class="timeline-wrap">
-        <span class="time-text" id="time-current">0:00</span>
-        <input type="range" class="seek-slider" id="seek-slider" min="0" max="100" value="0" />
-        <span class="time-text" id="time-duration">0:00</span>
+      <!-- Scrubber Slider -->
+      <div class="player-timeline-row">
+        <span class="time-label" id="time-current">0:00</span>
+        <input type="range" class="timeline-slider" id="seek-slider" min="0" max="100" value="0" />
+        <span class="time-label" id="time-duration">0:00</span>
       </div>
     </div>
 
     <!-- Right: Volume Slider -->
-    <div class="player-right">
-      <div class="volume-wrap">
+    <div class="player-dock-right">
+      <div class="volume-box">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-        <input type="range" class="volume-slider" id="volume-slider" min="0" max="100" value="80" />
+        <input type="range" class="vol-slider" id="volume-slider" min="0" max="100" value="80" />
       </div>
     </div>
   </footer>
